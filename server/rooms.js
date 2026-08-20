@@ -76,7 +76,7 @@ function normalizeText (value) {
 function stripFeaturingFromTitle (value) {
   return (value || '')
     .toString()
-    .replace(/\s*[([–—-]?\s*(feat\.?|ft\.?|featuring)\b.*$/i, '')
+    .replace(/\s*[([–—-]?\s*\b(feat\.?|ft\.?|featuring)\b.*$/i, '')
     .trim()
 }
 
@@ -90,7 +90,10 @@ function stripVersionDescriptors (value) {
     .toString()
     .replace(/\s*\([^)]*\)/g, '')
     .replace(/\s*\[[^\]]*\]/g, '')
-    .replace(/\s*[-–—]\s*\b(remaster(?:ed)?|reimagin(?:ed)?)\b.*$/gi, '')
+    // Spotify haengt Fassungs-Hinweise mit " - " an ("Song - 2011 Remaster",
+    // "Shine - Acoustic", "Theme - From \"Platoon\""). Die Leerzeichen um den
+    // Bindestrich sind Pflicht, sonst wuerde "Played-A-Live" zu "Played-A".
+    .replace(/\s+[-–—]\s+.*\b(remaster(?:ed)?|reimagin(?:ed)?|re-?recorded|live|acoustic|unplugged|instrumental|demo|mono|stereo|radio\s+edit|single\s+version|album\s+version|extended\s+(?:version|mix)|edit|mix|from\b.*)\b.*$/gi, '')
     .replace(/\s+\b(remaster(?:ed)?|reimagin(?:ed)?)\b.*$/gi, '')
     .trim()
 }
@@ -98,7 +101,10 @@ function stripVersionDescriptors (value) {
 function splitArtistCandidates (value) {
   return (value || '')
     .toString()
-    .split(/,|&| feat\.?| ft\.?| featuring | x | und /i)
+    // Semikolon ist in den Song-Daten der haeufigste Trenner zwischen
+    // mehreren Kuenstlern ("Luis Fonsi;Demi Lovato"). Ohne ihn galt der
+    // Name eines einzelnen Beteiligten als falsche Antwort.
+    .split(/,|;|&| feat\.?| ft\.?| featuring | x | und /i)
     .map((part) => part.trim())
     .filter(Boolean)
 }
@@ -129,8 +135,14 @@ function fuzzyMatch (input, expected) {
 }
 
 function matchesTitle (input, expected) {
-  const a = stripVersionDescriptors(stripFeaturingFromTitle(input))
-  const b = stripVersionDescriptors(stripFeaturingFromTitle(expected))
+  // Reihenfolge ist wichtig: ERST die Klammern-Zusaetze, DANN das Featuring.
+  // Andersherum schneidet `stripFeaturingFromTitle` bei einem Titel wie
+  // „Sucker for Pain (with … feat. X Ambassadors)" ab dem „feat." alles ab,
+  // samt schliessender Klammer. `stripVersionDescriptors` findet danach kein
+  // vollstaendiges Klammerpaar mehr, und der halbe Zusatz bleibt stehen -
+  // der Titel galt dann nur mit mitgetippter Gaesteliste als richtig.
+  const a = stripFeaturingFromTitle(stripVersionDescriptors(input))
+  const b = stripFeaturingFromTitle(stripVersionDescriptors(expected))
   return fuzzyMatch(a, b)
 }
 

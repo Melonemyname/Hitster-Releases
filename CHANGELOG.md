@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-08-20 – Version 1.0.1: Titel und Künstler richtig erkennen
+
+Betrifft das Raten von Titel und Künstler (Bingo-Kategorien „Titel des Songs" und
+„Name der Band / des Künstlers" sowie die Bonusfragen im Film-Modus).
+
+- **Titel wurden mitten im Wort abgeschnitten.** Der Featuring-Filter hatte keine
+  Wortgrenze vor dem Suchmuster und schlug überall zu, wo ein Wort auf „ft" endet.
+  Aus „Kein Schwein ruft mich an" wurde intern „Kein Schwein ru", aus „no tears left
+  to cry" wurde „no tears le", aus „Thrift Shop" wurde „Thri". Beim Vergleich fiel
+  das nicht auf, weil beide Seiten gleich verstümmelt wurden, aber es war gefährlich:
+  Von „Left Outside Alone" blieb „Le" übrig, von „Lift Me Up" blieb „Li", und der
+  Abstand liegt innerhalb der Tippfehler-Toleranz. Eine falsche Antwort wäre als
+  richtig durchgegangen. 16 Titel im vorhandenen Bestand waren betroffen.
+- **„(feat. …)" musste mitgetippt werden.** Zwei Bereinigungsschritte liefen in der
+  falschen Reihenfolge: Erst wurde ab „feat." alles abgeschnitten, samt schließender
+  Klammer, danach fand die Klammern-Bereinigung kein vollständiges Paar mehr. Bei
+  „Sucker for Pain (with Wiz Khalifa, … feat. X Ambassadors)" blieb die halbe
+  Gästeliste stehen und wurde verlangt.
+- **Mehr Fassungs-Hinweise werden erkannt.** Bisher nur „Remastered" und
+  „Reimagined", und auch nur direkt hinter dem Bindestrich, sodass „Song - 2011
+  Remaster" durchfiel. Jetzt zusätzlich Live, Acoustic, Unplugged, Instrumental,
+  Demo, Mono, Stereo, Radio Edit, Single/Album Version, Extended Mix, Edit, Mix und
+  „From …". Die Leerzeichen um den Bindestrich sind dabei Pflicht, sonst würde ein
+  Titel wie „Played-A-Live" zu „Played-A" verstümmelt.
+- **Semikolon trennt jetzt auch bei Künstlern.** Es ist mit 196 Einträgen der
+  häufigste Trenner in den Song-Daten, wurde aber als einziger nicht erkannt. Wer bei
+  „Luis Fonsi;Demi Lovato" nur einen der beiden nannte, lag zu Unrecht falsch.
+  Nicht ergänzt wurden „/", „+" und „with": Dort sind die Vorkommen im Bestand
+  ausschließlich echte Bandnamen wie AC/DC, Florence + The Machine oder
+  Sin With Sebastian.
+
+Abgesichert über den gesamten Bestand: Alle 4694 Titel und 2752 Künstler erkennen
+sich selbst, alle 1551 Einzelnennungen aus Kollaborationen werden akzeptiert, und
+der Vergleich alter gegen neue Logik ergab 20 Änderungen, allesamt Verbesserungen.
+
 ## 2026-08-20 – Version 1.0.0: Veröffentlichung
 
 - **Der Quellcode ist jetzt öffentlich**, im selben Repo, in dem schon die

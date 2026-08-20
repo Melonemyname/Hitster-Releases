@@ -96,7 +96,7 @@ export function useGuessEngine(state, { loadAnswerData }) {
   const stripFeaturingFromTitle = (value) => {
     return (value || "")
       .toString()
-      .replace(/\s*[([–—-]?\s*(feat\.?|ft\.?|featuring)\b.*$/i, "")
+      .replace(/\s*[([–—-]?\s*\b(feat\.?|ft\.?|featuring)\b.*$/i, "")
       .trim();
   };
 
@@ -114,8 +114,11 @@ export function useGuessEngine(state, { loadAnswerData }) {
         // 1) Runde und eckige Klammern samt Inhalt weg.
         .replace(/\s*\([^)]*\)/g, "")
         .replace(/\s*\[[^\]]*\]/g, "")
-        // 2) Suffix nach Bindestrich (typischerweise Remaster-Hinweise).
-        .replace(/\s*[-–—]\s*\b(remaster(?:ed)?|reimagin(?:ed)?)\b.*$/gi, "")
+        // 2) Fassungs-Hinweis nach " - " (Spotify-Konvention):
+        //    „Song - 2011 Remaster", „Shine - Acoustic", „Theme - From ...".
+        //    Die Leerzeichen um den Bindestrich sind Pflicht, sonst wuerde
+        //    ein Titel wie „Played-A-Live" zu „Played-A" verstuemmelt.
+        .replace(/\s+[-–—]\s+.*\b(remaster(?:ed)?|reimagin(?:ed)?|re-?recorded|live|acoustic|unplugged|instrumental|demo|mono|stereo|radio\s+edit|single\s+version|album\s+version|extended\s+(?:version|mix)|edit|mix|from\b.*)\b.*$/gi, "")
         // 3) Suffix ohne Klammern („Song Remastered 2011").
         .replace(/\s+\b(remaster(?:ed)?|reimagin(?:ed)?)\b.*$/gi, "")
         .trim()
@@ -125,7 +128,10 @@ export function useGuessEngine(state, { loadAnswerData }) {
   const splitArtistCandidates = (value) => {
     return (value || "")
       .toString()
-      .split(/,|&| feat\.?| ft\.?| featuring | x | und /i)
+      // Semikolon ist in den Song-Daten der häufigste Trenner zwischen
+      // mehreren Künstlern („Luis Fonsi;Demi Lovato"). Ohne ihn galt der
+      // Name eines einzelnen Beteiligten als falsche Antwort.
+      .split(/,|;|&| feat\.?| ft\.?| featuring | x | und /i)
       .map((part) => part.trim())
       .filter(Boolean);
   };
@@ -207,11 +213,17 @@ export function useGuessEngine(state, { loadAnswerData }) {
     const artistInput = (guessedArtist.value || "").trim();
     const yearInput = guessedYear.value;
 
-    const expectedTitle = stripVersionDescriptors(
-      stripFeaturingFromTitle(correctData.title || ""),
+    // Reihenfolge ist wichtig: ERST die Klammern-Zusätze, DANN das Featuring.
+    // Andersherum schneidet `stripFeaturingFromTitle` bei einem Titel wie
+    // „Sucker for Pain (with … feat. X Ambassadors)" ab dem „feat." alles ab,
+    // samt schließender Klammer. `stripVersionDescriptors` findet danach kein
+    // vollständiges Klammerpaar mehr, und der halbe Zusatz bleibt stehen –
+    // der Titel galt dann nur mit mitgetippter Gästeliste als richtig.
+    const expectedTitle = stripFeaturingFromTitle(
+      stripVersionDescriptors(correctData.title || ""),
     );
-    const guessedTitleBase = stripVersionDescriptors(
-      stripFeaturingFromTitle(titleInput),
+    const guessedTitleBase = stripFeaturingFromTitle(
+      stripVersionDescriptors(titleInput),
     );
     const titleCorrect =
       titleInput.length > 0
