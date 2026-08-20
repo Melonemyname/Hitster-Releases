@@ -68,6 +68,7 @@ Wer nichts einrichten will, nimmt ein fertiges Paket aus den
 | Windows | `Hitster-Setup-*.exe` |
 | Linux | `*.AppImage`, `*.deb` oder `*.rpm` |
 | macOS (Apple Silicon) | `*-arm64.dmg` |
+| Eigener Server, ohne Git und ohne Bauen | `Hitster-Server-*.zip` |
 
 Unter Windows und Linux (AppImage) aktualisiert sich die App selbst.
 
@@ -173,8 +174,17 @@ npm run build
 
 ## Andere mitspielen lassen
 
-Dafür muss der Server für die Mitspielenden erreichbar sein. Es gibt drei Wege,
-und nur der letzte ist aufwendig:
+Der einfachste Weg ist das fertige **Server-Paket** aus den
+[Releases](../../releases) (`Hitster-Server-*.zip`): entpacken, das passende
+„Server starten"-Skript doppelklicken, fertig. Es enthält Server und Spiel
+zusammen; die Startskripte liegen sichtbar oben, alles Übrige steckt im
+Unterordner `programm/`. Gebraucht wird nur Node.js
+([nodejs.org](https://nodejs.org), LTS), das Skript sagt Bescheid, falls es
+fehlt. Eine `LIESMICH.txt` mit allem Nötigen liegt bei. Das Klonen des Repos
+braucht nur, wer am Code arbeiten will.
+
+Damit die anderen den Server erreichen, gibt es drei Wege, und nur der letzte
+ist aufwendig:
 
 1. **Alle im selben WLAN.** Keine Portfreigabe, keine Domain. Es reicht die
    lokale IP des Rechners (etwa `192.168.178.42`), die anderen öffnen
