@@ -1,0 +1,456 @@
+// app global css in SCSS form
+
+/* Overscroll/Bounce auf allen Seiten aus. */
+html,
+body {
+  overscroll-behavior: none;
+}
+
+// Quasar Farb-Overrides für helles transparentes Türkis/Blau
+$primary: #00bcd4;
+$secondary: #26c6da;
+$accent: #00acc1;
+// positive = echtes Erfolgs-Grün (früher altes Marken-Cyan #00e5ff): semantisch
+// klar, theme-neutral und von primary unterscheidbar.
+$positive: #21ba45;
+$cyan: #00bcd4;
+
+:root {
+  --q-primary: #00bcd4;
+  --q-secondary: #26c6da;
+  --q-accent: #00acc1;
+  --q-positive: #21ba45 !important;
+
+  /* Theme-Variablen (werden von useTheme.js zur Laufzeit überschrieben).
+     Defaults = bisheriger Look, damit ohne Theme-Auswahl alles gleich bleibt. */
+  --app-bg: #121212;
+  --app-on-bg: #f5f5f5;
+  --app-accent: #00bcd4;
+  --app-accent-hover: #26c6da;
+  --app-on-accent: #ffffff;
+
+  /* Acrylic-/Mica-artige Flächen: leicht durchscheinend + Weichzeichner,
+     damit die Theme-Farben auch hinter Karten/Containern sichtbar bleiben.
+     Bewusst dunkel getönt, damit heller Text auf jedem Theme lesbar bleibt.
+     --surface-bg-weak: für verschachtelte Flächen (Karte auf Karte), damit der
+     Effekt dort nicht doppelt/zu trüb stapelt. */
+  --surface-bg: rgba(20, 20, 24, 0.72);
+  --surface-bg-weak: rgba(255, 255, 255, 0.05);
+  --surface-border: rgba(255, 255, 255, 0.08);
+  --surface-blur: 18px;
+  /* Einheitliche Ecken-Rundung für alle Container/Popups/Buttons. */
+  --surface-radius: 12px;
+  /* Einheitliche Inhaltsbreite app-weit (entspricht der großen Bingo-Acryl-
+     fläche). Inhalts-/Spielseiten zentrieren ihren Inhalt auf diese Breite;
+     kleiner Viewport = volle Breite (max-width wirkt nur als Deckel).
+     Ausgenommen: Login/Registrieren/Passwort-vergessen und Dialoge. */
+  --content-max-width: 1180px;
+}
+
+/* Einheitliche Rundung app-weit (Karten, Popups, beschriftete Buttons).
+   Runde Icon-/FAB-Buttons behalten ihre Kreisform. */
+.q-card,
+.q-menu {
+  border-radius: var(--surface-radius);
+}
+.q-btn:not(.q-btn--round):not(.q-btn--fab):not(.q-btn--fab-mini) {
+  border-radius: var(--surface-radius);
+}
+
+/* Text, der direkt auf dem Theme-Hintergrund liegt, folgt der abgeleiteten
+   On-Background-Farbe. */
+.q-page {
+  color: var(--app-on-bg, #f5f5f5);
+}
+
+/* ── Einheitliche Buttons ────────────────────────────────────────────────
+   ALLE rechteckigen (beschrifteten) Buttons: gefüllt in Theme-Akzent,
+   einheitliche Schriftfarbe (--app-on-accent), kein Rand, kein Schatten.
+   Destruktive Aktionen gefüllt rot. Segment-Toggles + runde Icon-Buttons
+   werden gesondert behandelt. */
+.q-btn {
+  box-shadow: none !important;
+}
+/* Standard-Buttons zeichnen ihre Elevation über ein ::before – ebenfalls
+   entfernen, damit ALLE Buttons einheitlich schattenlos sind. */
+.q-btn:before {
+  box-shadow: none !important;
+}
+.q-btn--rectangle {
+  background: var(--app-accent) !important;
+  color: var(--app-on-accent) !important;
+  border: none !important;
+}
+/* Hover-Farbe pro Theme (berechnet in themeColors.js). */
+.q-btn--rectangle:hover {
+  background: var(--app-accent-hover) !important;
+}
+/* Outline-Buttons zeichnen ihren Rand über ein ::before – entfernen. */
+.q-btn--rectangle.q-btn--outline:before {
+  border: 0 !important;
+}
+/* Auf accent-farbigen Buttons IMMER die Theme-On-Accent-Farbe erzwingen –
+   auch auf inneren Elementen (.q-btn__content, Icons). Damit werden
+   Quasar-Utility-Klassen wie `text-white`/`text-black` (via `text-color`-Prop)
+   überschrieben, die sonst je nach Button verschieden gesetzt sind. */
+.q-btn--rectangle,
+.q-btn--rectangle .q-btn__content,
+.q-btn--rectangle .q-icon,
+.q-btn.bg-primary,
+.q-btn.bg-primary .q-btn__content,
+.q-btn.bg-primary .q-icon,
+.q-btn.bg-secondary,
+.q-btn.bg-secondary .q-btn__content,
+.q-btn.bg-secondary .q-icon,
+.q-btn.bg-accent,
+.q-btn.bg-accent .q-btn__content,
+.q-btn.bg-accent .q-icon {
+  color: var(--app-on-accent) !important;
+}
+/* Destruktive Aktionen bleiben rot (ebenfalls gefüllt). */
+.q-btn--rectangle.bg-negative,
+.q-btn--rectangle.text-negative {
+  background: var(--q-negative) !important;
+  color: #fff !important;
+}
+.q-btn--rectangle.bg-negative .q-btn__content,
+.q-btn--rectangle.bg-negative .q-icon,
+.q-btn--rectangle.text-negative .q-btn__content,
+.q-btn--rectangle.text-negative .q-icon {
+  color: #fff !important;
+}
+/* Runde Icon-/FAB-Buttons mit Marken-Hintergrund: Icon folgt On-Accent. */
+.q-btn.bg-primary,
+.q-btn.bg-secondary,
+.q-btn.bg-accent {
+  color: var(--app-on-accent) !important;
+}
+/* „Nicht ausgewählt"-Button (z.B. Startspieler-Auswahl): dezente
+   Theme-Akzent-Tönung statt farbloser Surface-Fläche, damit die
+   Buttons auf jedem Theme (auch auf dunkler Card-Chrome) klar lesbar
+   und theme-farbig bleiben. Der ausgewählte Button (voller Akzent)
+   hebt sich weiterhin deutlich ab. */
+.q-btn.btn-unselected {
+  background: color-mix(in srgb, var(--app-accent) 30%, transparent) !important;
+  color: var(--app-on-accent) !important;
+  border: 1px solid color-mix(in srgb, var(--app-on-accent) 45%, transparent) !important;
+}
+.q-btn.btn-unselected .q-btn__content,
+.q-btn.btn-unselected .q-icon {
+  color: var(--app-on-accent) !important;
+}
+.q-btn.btn-unselected:hover {
+  background: color-mix(in srgb, var(--app-accent) 55%, transparent) !important;
+  border-color: color-mix(in srgb, var(--app-on-accent) 70%, transparent) !important;
+}
+
+/* ── Deaktivierte Buttons: theme-neutral & klar erkennbar ─────────────────
+   Quasar setzt für deaktivierte Buttons `opacity: 0.6` (via `.q-btn--disable`
+   bzw. das native `disabled`-Attribut). Zusammen mit der Accent-Füllung wird
+   das auf vielen Themes zu dunkel / farb-nah, sodass der Button „verschwindet".
+   Lösung: der Button behält eine dezente Theme-Akzent-Tönung (statt farblos
+   grau) und die Schrift kommt über `--app-on-accent`, die per Definition auf
+   dem Akzent lesbar ist. Zusätzlich desaturiert + gestrichelter Rand, damit
+   der Button klar als „nicht klickbar" erkennbar bleibt. */
+.q-btn--rectangle.q-btn--disable,
+.q-btn--rectangle[disabled],
+.q-btn--rectangle.disabled {
+  background: color-mix(in srgb, var(--app-accent) 32%, transparent) !important;
+  color: var(--app-on-accent) !important;
+  border: 2px dashed color-mix(in srgb, var(--app-on-accent) 60%, transparent) !important;
+  opacity: 1 !important;
+  filter: saturate(0.55);
+  cursor: not-allowed !important;
+}
+.q-btn--rectangle.q-btn--disable .q-btn__content,
+.q-btn--rectangle.q-btn--disable .q-icon,
+.q-btn--rectangle[disabled] .q-btn__content,
+.q-btn--rectangle[disabled] .q-icon,
+.q-btn--rectangle.disabled .q-btn__content,
+.q-btn--rectangle.disabled .q-icon {
+  color: var(--app-on-accent) !important;
+  opacity: 0.9;
+}
+/* Deaktivierte Chips/Buttons in Segment-Toggles konsistent behandeln (der
+   Toggle rendert die inaktiven Optionen weiterhin, aber wenn eine ganze
+   Option `disable`-Flag hat, soll sie erkennbar bleiben). */
+.q-btn-group > .q-btn.q-btn--disable,
+.q-btn-group > .q-btn[disabled] {
+  background: color-mix(in srgb, var(--app-accent) 32%, transparent) !important;
+  color: var(--app-on-accent) !important;
+  border: 2px dashed color-mix(in srgb, var(--app-on-accent) 60%, transparent) !important;
+  opacity: 1 !important;
+  filter: saturate(0.55);
+  cursor: not-allowed !important;
+}
+
+/* Flat/Outline-Buttons mit color="grey*" (Abbrechen/Schließen) sollen die
+   Theme-Text-Farbe verwenden, statt eines fest-grauen Textes der bei
+   hellen Themes fast unsichtbar wird. Nur Text-Farbe – Hintergrund bleibt
+   transparent. */
+.q-btn.q-btn--flat.text-grey,
+.q-btn.q-btn--flat.text-grey-6,
+.q-btn.q-btn--flat.text-grey-7,
+.q-btn.q-btn--flat.text-grey-8,
+.q-btn.q-btn--outline.text-grey,
+.q-btn.q-btn--outline.text-grey-6,
+.q-btn.q-btn--outline.text-grey-7,
+.q-btn.q-btn--outline.text-grey-8 {
+  color: var(--app-on-bg) !important;
+  opacity: 0.85;
+}
+
+/* Segment-Toggles (q-btn-toggle): Abstand + klare Auswahl (überschreibt die
+   Fill-Regel). Ausgewählt = Akzent, sonst dezente Fläche – gilt app-weit. */
+.q-btn-group {
+  gap: 8px;
+  box-shadow: none !important;
+}
+.q-btn-group > .q-btn {
+  border-radius: var(--surface-radius) !important;
+}
+.q-btn-group > .q-btn[aria-pressed="true"] {
+  background: var(--app-accent) !important;
+  color: var(--app-on-accent) !important;
+}
+/* Nicht-ausgewählte Toggle-Optionen (z. B. Modus-Auswahl neben „Normal"):
+   dezenter Theme-Akzent als Füllung + Schrift über `--app-on-accent`. Damit
+   sieht die inaktive Option wie eine dezentere Version der aktiven aus,
+   erbt die Theme-Farbe (nicht farblos grau) und der Text ist auf jedem
+   Theme lesbar. */
+.q-btn-group > .q-btn[aria-pressed="false"] {
+  background: color-mix(in srgb, var(--app-accent) 30%, transparent) !important;
+  color: var(--app-on-accent) !important;
+  border: 1px solid color-mix(in srgb, var(--app-on-accent) 45%, transparent) !important;
+}
+.q-btn-group > .q-btn[aria-pressed="false"] .q-btn__content,
+.q-btn-group > .q-btn[aria-pressed="false"] .q-icon {
+  color: var(--app-on-accent) !important;
+}
+.q-btn-group > .q-btn[aria-pressed="false"]:hover {
+  background: color-mix(in srgb, var(--app-accent) 55%, transparent) !important;
+  border-color: color-mix(in srgb, var(--app-on-accent) 70%, transparent) !important;
+}
+
+/* Abstand zwischen benachbarten Buttons (Stepper-Navigation, Dialog-Aktionen). */
+.q-stepper__nav .q-btn + .q-btn,
+.q-card__actions .q-btn + .q-btn {
+  margin-left: 8px;
+}
+
+/* ── Einheitliche Chips ───────────────────────────────────────────────────
+   Theme-Akzent-Hintergrund + On-Accent-Schrift/-Icon (destruktive rot). */
+.q-chip {
+  background: var(--app-accent) !important;
+  color: var(--app-on-accent) !important;
+}
+.q-chip.bg-negative,
+.q-chip.text-negative {
+  background: var(--q-negative) !important;
+  color: #fff !important;
+}
+/* Chips setzen ihre Textfarbe oft per Utility-Class `text-white` (die
+   überschreibt sonst unser Theme-Textfeld und wird bei hellen Themes
+   unlesbar). Explizit über die Chip-Struktur die On-Accent-Farbe erzwingen
+   – gilt NICHT für negative (rot). */
+.q-chip:not(.bg-negative):not(.text-negative) .q-chip__content,
+.q-chip:not(.bg-negative):not(.text-negative) .q-icon {
+  color: var(--app-on-accent) !important;
+}
+
+/* ── Einheitliche farbige Karten-/Dialog-Köpfe ────────────────────────────
+   Schrift folgt On-Accent (statt fest text-white -> unlesbar bei hellem Akzent). */
+.q-card__section.bg-primary,
+.q-card__section.bg-secondary,
+.q-card__section.bg-accent {
+  color: var(--app-on-accent) !important;
+}
+
+/* ── Badges wie Chips vereinheitlichen (Theme-Akzent + On-Accent, negative rot). */
+.q-badge {
+  background: var(--app-accent) !important;
+  color: var(--app-on-accent) !important;
+}
+.q-badge.bg-negative,
+.q-badge.text-negative {
+  background: var(--q-negative) !important;
+  color: #fff !important;
+}
+
+/* ── Banner: durchscheinende Surface-Fläche statt fixem Grau. */
+.q-banner {
+  background: var(--surface-bg) !important;
+  color: var(--app-on-bg) !important;
+}
+
+/* ── Aktiver/ausgewählter Listeneintrag (z.B. Slot-Auswahl) im Theme-Akzent. */
+.item-active-theme {
+  background: var(--app-accent) !important;
+  color: var(--app-on-accent) !important;
+}
+
+/* ── Toasts folgen dem Theme (Info/Erfolg/Warnung = Akzent).
+   Nur Fehler (negative) bleiben rot als klare Warnung. */
+.q-notification.bg-info,
+.q-notification.bg-positive,
+.q-notification.bg-warning {
+  background: var(--app-accent) !important;
+  color: var(--app-on-accent) !important;
+}
+
+/* Karten & Stepper: durchscheinende Acrylic-Fläche statt voll-opakem Dark.
+   Heller Text bleibt (dunkle Tönung sorgt für Kontrast auch bei hellen Themes). */
+.q-card {
+  color: #fff;
+  background-color: var(--surface-bg) !important;
+  backdrop-filter: blur(var(--surface-blur)) saturate(150%);
+  -webkit-backdrop-filter: blur(var(--surface-blur)) saturate(150%);
+  border: 1px solid var(--surface-border);
+}
+
+/* Stepper transparent halten, damit die Acrylic-Fläche der umgebenden Karte
+   (z.B. Versionsauswahl) durchscheint. */
+.q-stepper,
+.q-stepper__header,
+.q-stepper__content,
+.q-stepper__step-inner,
+.q-stepper__tab {
+  color: #fff;
+  background: transparent !important;
+  box-shadow: none;
+}
+
+/* Popups/Menüs (FAB-Menü, Select-/Dropdown-Popups) bekommen denselben
+   Acryl-Look wie Karten, statt der voll-opaken Dark-Mode-Fläche. */
+.q-menu {
+  background-color: var(--surface-bg) !important;
+  backdrop-filter: blur(var(--surface-blur)) saturate(150%);
+  -webkit-backdrop-filter: blur(var(--surface-blur)) saturate(150%);
+  border: 1px solid var(--surface-border);
+}
+/* Listen/Items im Menü transparent halten, damit die Acryl-Fläche durchscheint. */
+.q-menu .q-list,
+.q-menu .q-item {
+  background: transparent !important;
+}
+
+/* ── Versionsauswahl-Karten (Index + Lobby, EINE zentrale Definition) ──────
+   PNG füllt die Karte randlos (auf Rundung geclippt), kein Rahmen. Auswahl als
+   Akzent-Ring; bei Standard-/keinem Theme als animierter Regenbogen-Ring.
+   Wichtig: Blöcke NACH `.q-card` (oben), damit sie diese überschreiben. */
+.version-grid {
+  display: grid;
+  /* Einheitlich 4 Karten pro Reihe (Index/Lobby/VersionsDialog) – die vorherigen
+     2 Spalten waren zu groß. Mobile bricht in der Media-Query unten auf 2. */
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  /* Items oben ausrichten (nicht strecken) – sonst zentriert der <button> bei
+     mehrzeiligen Namen den Inhalt und das PNG rutscht nach unten. */
+  align-items: start;
+}
+.version-card-btn {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  padding: 0;
+  cursor: pointer;
+  text-align: center;
+}
+.timeline-look-card {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  background: var(--surface-bg-weak) !important;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border: none;
+  border-radius: var(--surface-radius);
+  overflow: hidden;
+  box-shadow: none;
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease,
+    filter 180ms ease;
+}
+.timeline-look-content {
+  height: 100%;
+  padding: 0;
+}
+.version-icon {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.version-name {
+  margin-top: 8px;
+  font-weight: 700;
+}
+.version-card-btn:hover .timeline-look-card {
+  transform: translateY(-6px) scale(1.02);
+  box-shadow: 0 18px 34px rgba(0, 0, 0, 0.45);
+  filter: brightness(1.08);
+}
+.version-card-btn.selected .timeline-look-card {
+  box-shadow: 0 0 0 3px var(--app-accent);
+  transform: translateY(-4px);
+  filter: brightness(1.04);
+}
+.version-card-btn.selected:hover .timeline-look-card {
+  box-shadow:
+    0 0 0 3px var(--app-accent),
+    0 18px 34px rgba(0, 0, 0, 0.45);
+  transform: translateY(-7px) scale(1.02);
+}
+/* Ausgegraut: nicht anklickbar (Battle-Modus: bereits vergeben oder
+   Songanzahl außerhalb der Toleranz zur zuerst gewaehlten Version). */
+.version-card-btn.disabled,
+.version-card-btn[disabled] {
+  cursor: not-allowed;
+  opacity: 0.35;
+  filter: grayscale(0.7);
+}
+.version-card-btn.disabled:hover .timeline-look-card,
+.version-card-btn[disabled]:hover .timeline-look-card {
+  transform: none;
+  box-shadow: none;
+  filter: grayscale(0.7);
+}
+/* Fallback: Standard-/kein Theme -> Regenbogen-Ring (Flag setzt useTheme.js). */
+:root[data-default-theme="true"] .version-card-btn.selected .timeline-look-card {
+  animation: rainbow-ring 8s linear infinite;
+}
+@keyframes rainbow-ring {
+  0% { box-shadow: 0 0 0 3px #ff0000, 0 0 16px #ff0000; }
+  14% { box-shadow: 0 0 0 3px #ff7f00, 0 0 16px #ff7f00; }
+  28% { box-shadow: 0 0 0 3px #ffff00, 0 0 16px #ffff00; }
+  42% { box-shadow: 0 0 0 3px #00ff00, 0 0 16px #00ff00; }
+  57% { box-shadow: 0 0 0 3px #0000ff, 0 0 16px #0000ff; }
+  71% { box-shadow: 0 0 0 3px #4b0082, 0 0 16px #4b0082; }
+  85% { box-shadow: 0 0 0 3px #9400d3, 0 0 16px #9400d3; }
+  100% { box-shadow: 0 0 0 3px #ff0000, 0 0 16px #ff0000; }
+}
+@media (max-width: 599px) {
+  .version-grid {
+    /* Auf schmalen Screens 2 Spalten – sonst werden die 4 zu winzig. */
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+}
+
+/* ========== GLOBALE DIALOG-STYLES ========== */
+
+/* Kleine App-weite Gap-Utility (Flex-Kinder). Wird u.a. im Bingo-Header
+   und in den Host-Aktionsleisten (Skip/Auflösen/Timer-Toggle) verwendet,
+   damit die Buttons/Chips nicht direkt aneinander kleben. */
+.gap-xs { gap: 4px; }
+.gap-sm { gap: 8px; }
+.gap-md { gap: 12px; }
+.gap-lg { gap: 20px; }
+
+@media (max-width: 599px) {
+  .q-dialog .q-card {
+    min-width: unset !important;
+    width: 92vw !important;
+    max-width: 92vw !important;
+  }
+}

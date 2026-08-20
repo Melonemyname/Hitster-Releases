@@ -1,0 +1,24 @@
+# Hitster – Reverse-Proxy mit automatischem HTTPS (Let's Encrypt) via Caddy.
+#
+# Einrichtung auf dem Server:
+#   1. Domain unten durch deine No-IP-Domain ersetzen.
+#   2. Nach /etc/caddy/Caddyfile kopieren:
+#        sudo cp ~/Hitster/deploy/Caddyfile /etc/caddy/Caddyfile
+#      (Domain dort eintragen) und neu laden:
+#        sudo systemctl reload caddy
+#
+# Voraussetzungen:
+#   - Router-Portfreigabe auf die feste LAN-IP des Surface:
+#       443/tcp  (Pflicht)   und   80/tcp  (fuer die Zertifikatsausstellung/-Redirect)
+#   - No-IP Update-Client (DUC) haelt die Domain auf deiner aktuellen Heim-IP.
+#   - Kein CGNAT (oeffentliche IPv4 vorhanden).
+#
+# Caddy holt und erneuert das TLS-Zertifikat automatisch, setzt X-Forwarded-For
+# (daher TRUST_PROXY=1 in server/.env) und reicht auch WebSockets korrekt durch.
+
+hitster.no-ip.org {
+    encode zstd gzip
+
+    # Node-Backend laeuft lokal auf Port 3000 (HOST=127.0.0.1 in server/.env).
+    reverse_proxy 127.0.0.1:3000
+}

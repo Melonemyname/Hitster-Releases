@@ -1,0 +1,32 @@
+# systemd --user Unit fuer das Hitster-Backend (API + Socket.io).
+#
+# Installation (als der Nutzer, NICHT als root):
+#   mkdir -p ~/.config/systemd/user
+#   cp ~/Hitster/deploy/hitster-backend.service ~/.config/systemd/user/
+#   loginctl enable-linger "$USER"        # laeuft ohne aktive Login-Sitzung
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now hitster-backend
+# Status/Logs:
+#   systemctl --user status hitster-backend
+#   journalctl --user -u hitster-backend -f
+#
+# Annahmen (bei abweichendem Klonpfad hier anpassen):
+#   - Repo unter ~/Hitster  ->  %h expandiert zum Home-Verzeichnis
+#   - node unter /usr/bin/node  ->  pruefen mit `which node`; bei nvm den dortigen
+#     absoluten Pfad eintragen (systemd braucht einen absoluten ExecStart-Pfad).
+
+[Unit]
+Description=Hitster Backend (API + Socket.io)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Hitster/server
+EnvironmentFile=%h/Hitster/server/.env
+ExecStart=/usr/bin/node index.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

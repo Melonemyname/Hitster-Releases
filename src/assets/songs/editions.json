@@ -1,0 +1,146 @@
+{
+  "version": 1,
+  "editions": [
+    {
+      "value": "deutschland-rock",
+      "label": "Deutschland Rock",
+      "file": "hitster-deutschland-rock.txt",
+      "cover": "rock.png",
+      "custom": false
+    },
+    {
+      "value": "español-rock",
+      "label": "Español Rock",
+      "file": "hitster-espanol-rock.txt",
+      "cover": "rock.png",
+      "custom": false
+    },
+    {
+      "value": "hungary-rock",
+      "label": "Hungary Rock",
+      "file": "hitster-hungary-rock.txt",
+      "cover": "rock.png",
+      "custom": false
+    },
+    {
+      "value": "nederlands-rock",
+      "label": "Nederlands Rock",
+      "file": "hitster-nederlands-rock.txt",
+      "cover": "rock.png",
+      "custom": false
+    },
+    {
+      "value": "nordics-rock",
+      "label": "Nordics Rock",
+      "file": "hitster-nordics-rock.txt",
+      "cover": "rock.png",
+      "custom": false
+    },
+    {
+      "value": "polonia-rock",
+      "label": "Polonia Rock",
+      "file": "hitster-polonia-rock.txt",
+      "cover": "rock.png",
+      "custom": false
+    },
+    {
+      "value": "deutsch",
+      "label": "Deutsch",
+      "file": "hitster-deutsch.txt",
+      "cover": "standart.png",
+      "custom": false
+    },
+    {
+      "value": "deutschland-celebration",
+      "label": "Deutschland Celebration",
+      "file": "hitster-deutschland-celebration.txt",
+      "cover": "celebration.png",
+      "custom": false
+    },
+    {
+      "value": "deutschland-soundtracks-expansion",
+      "label": "Deutschland Soundtracks Expansion",
+      "file": "hitster-deutschland-soundtracks-expansion.txt",
+      "cover": "soundtrack.png",
+      "custom": false,
+      "film": true
+    },
+    {
+      "value": "deutschland-christmas-expansion",
+      "label": "Deutschland Christmas Expansion",
+      "file": "hitster-deutschland-christmas-expansion.txt",
+      "cover": "christmas.png",
+      "custom": false
+    },
+    {
+      "value": "deutschland-guilty-pleasures",
+      "label": "Deutschland Guilty Pleasures",
+      "file": "hitster-deutschland-guilty-pleasures.txt",
+      "cover": "guilty.png",
+      "custom": false
+    },
+    {
+      "value": "deutschland-summer-party",
+      "label": "Deutschland Summer Party",
+      "file": "hitster-deutschland-summer-party.txt",
+      "cover": "summer.png",
+      "custom": false
+    },
+    {
+      "value": "deutschland-hip-hop",
+      "label": "Deutschland Urban & Hip-Hop",
+      "file": "hitster-deutschland-hip-hop.txt",
+      "cover": "hiphop.png",
+      "custom": false
+    },
+    {
+      "value": "schlager-party",
+      "label": "Schlager Party",
+      "file": "hitster-schlager-party.txt",
+      "cover": "schlager.png",
+      "custom": false
+    },
+    {
+      "value": "bingo-deutschland",
+      "label": "Bingo Deutschland",
+      "file": "hitster-bingo-deutschland.txt",
+      "cover": "bingo.png",
+      "custom": false
+    },
+    {
+      "value": "bayern1-expansion",
+      "label": "Bayern1 Expansion",
+      "file": "hitster-bayern1-expansion.txt",
+      "cover": "bayern.png",
+      "custom": false
+    },
+    {
+      "value": "platinum-edition",
+      "label": "Platinum Edition",
+      "file": "hitster-platinum-edition.txt",
+      "cover": "platinum.png",
+      "custom": false
+    },
+    {
+      "value": "battle-generations-2005-2025",
+      "label": "Battle of the Generations (2005-2025)",
+      "file": "hitster-battle-generations-2005-2025.txt",
+      "cover": "battle-generations.png",
+      "custom": false
+    },
+    {
+      "value": "battle-generations-1985-2004",
+      "label": "Battle of the Generations (1985-2004)",
+      "file": "hitster-battle-generations-1985-2004.txt",
+      "cover": "battle-generations.png",
+      "custom": false
+    },
+    {
+      "value": "battle-generations-bis-1984",
+      "label": "Battle of the Generations (bis 1984)",
+      "file": "hitster-battle-generations-bis-1984.txt",
+      "cover": "battle-generations.png",
+      "custom": false
+    }
+  ]
+}

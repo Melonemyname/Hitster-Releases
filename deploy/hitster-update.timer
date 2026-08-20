@@ -1,0 +1,13 @@
+# Taeglicher Trigger fuer hitster-update.service.
+# Zeitpunkt 04:00 (nach dem BorgBackup um 03:00). Persistent=true holt einen
+# verpassten Lauf nach (z. B. wenn der Rechner um 04:00 aus war).
+
+[Unit]
+Description=Taeglicher Hitster-Update-Lauf
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,75 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+.DS_Store
+dist
+dist-ssr
+coverage
+*.local
+
+# Hochgeladene Profilbilder: **bewusst mit im Repo**, analog zu server/users.json.
+# Solange der Server abwechselnd auf Mac/Linux/Windows läuft, ist das der
+# einfachste Weg, die zugehörigen Bild-Dateien synchron zu halten (users.json
+# referenziert /uploads/avatars/…jpeg). Sobald der Server dauerhaft an einem
+# Ort läuft, kommt der Ordner (analog zu users.json) wieder aus dem Repo raus –
+# siehe BACKLOG „Server / Hosting".
+# server/uploads
+
+# Auto-generiertes JWT-Signier-Secret für lokale Entwicklung (persistiert,
+# damit Tokens Neustarts überleben). In Produktion wird stattdessen die
+# ENV-Variable JWT_SECRET erzwungen.
+server/.jwt-secret
+
+# Spotify-Playlist-Exporte (Eingabe für scripts/import_hitster_csvs.py)
+scripts/spotify-exports
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Quasar specific
+.quasar
+.history
+.cache
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# OS
+Thumbs.db
+
+# Account-gebundene eigene Versionen (Laufzeit-Daten)
+server/user-versions.json
+# Server-Owner (= Admin) je Server, gehört nicht ins Repo (liegt im DATA_DIR)
+server/server-owner.json
+# Eingeschränkte Versionen: Runtime-Store (Seed .seed.json bleibt im Repo)
+server/restricted-versions.json
+.gh-token
+
+# ── Laufzeitdaten des Servers (NIE versionieren) ──────────────────────────
+# Entstehen im Betrieb bzw. im DATA_DIR. Enthalten Konten mit Passwort-Hashes,
+# Sicherheitsfragen, Profilbilder und die Song-Klassifikationen der Mitspieler.
+server/users.json
+server/server-owner.json
+server/uploads/
+server/song-classifications.json
+server/user-versions.json
+server/restricted-versions.json
+server/restricted-versions.seed.json
+server/.env
+server/.jwt-secret

@@ -1,0 +1,19 @@
+# systemd --user Unit: fuehrt einmalig das Update-Skript aus (vom Timer getriggert
+# oder manuell via `systemctl --user start hitster-update`).
+#
+# Installation zusammen mit hitster-update.timer:
+#   cp ~/Hitster/deploy/hitster-update.service ~/.config/systemd/user/
+#   cp ~/Hitster/deploy/hitster-update.timer   ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now hitster-update.timer
+# Logs des letzten Laufs:
+#   journalctl --user -u hitster-update -e
+
+[Unit]
+Description=Hitster: taeglicher git pull + Neustart
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/Hitster/deploy/hitster-update.sh
