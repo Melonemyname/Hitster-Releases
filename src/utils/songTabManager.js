@@ -1,16 +1,140 @@
 /**
  * Öffnet den Song extern und sorgt dafür, dass sich kein "alter" Song aufstaut.
  *
- * Desktop-App (Electron): über die Bridge (hitster.openSong) im nativen
- * Spotify-Client öffnen (spotify:track:ID). Der Client ersetzt die laufende
- * Wiedergabe -> der vorherige Song wird automatisch abgelöst, es gibt keine
- * Tabs/Fenster zum Schließen. Fällt im Main-Prozess auf den System-Browser
- * zurück, wenn keine Spotify-App installiert ist.
+ * Drei Wege, je nach Umgebung:
  *
- * Web (Browser): neuen Tab öffnen und den zuvor geöffneten schließen.
+ * 1. Desktop-App (Electron): über die Bridge (hitster.openSong) im nativen
+ *    Spotify-Client (spotify:track:ID). Der Client ersetzt die laufende
+ *    Wiedergabe, es gibt keine Tabs zum Schließen. Auf macOS und Linux startet
+ *    der Main-Prozess die Wiedergabe sogar, ohne Spotify nach vorn zu holen.
+ *
+ * 2. Browser mit Wunsch "in der App öffnen" (Standard: automatisch): über das
+ *    Protokoll `spotify:`. Wichtig für Handys – ein per `window.open` geöffneter
+ *    https-Link löst die App-Verknüpfung von Android/iOS NICHT aus, sondern
+ *    landet in einem Browser-Tab. Nur der Protokoll-Link öffnet die App.
+ *    Unter Android Chrome wird eine Intent-URL benutzt, die den Rückfall auf
+ *    den Web-Player gleich mitliefert.
+ *
+ * 3. Browser ohne Spotify-App: neuer Tab auf open.spotify.com, der beim
+ *    nächsten Song wieder geschlossen wird (wie bisher).
  */
 
-let lastSongWindow = null
+const MODUS_KEY = "hitster-song-open-mode";
+
+// 'auto'    = App versuchen, bei Misserfolg Web-Player (Standard)
+// 'app'     = immer die App, kein Rückfall
+// 'browser' = immer der Web-Player im Tab
+export function getSongOpenMode() {
+  try {
+    const v = localStorage.getItem(MODUS_KEY);
+    return v === "app" || v === "browser" ? v : "auto";
+  } catch {
+    return "auto";
+  }
+}
+
+export function setSongOpenMode(mode) {
+  try {
+    if (mode === "app" || mode === "browser") {
+      localStorage.setItem(MODUS_KEY, mode);
+    } else {
+      localStorage.removeItem(MODUS_KEY);
+    }
+  } catch {
+    /* Speicher nicht verfügbar – dann gilt der Standard */
+  }
+}
+
+// Spotify-Track-Kennung aus URL oder URI ziehen.
+function trackId(url) {
+  const m = String(url || "").match(/track[/:]([A-Za-z0-9]+)/);
+  return m ? m[1] : "";
+}
+
+function istAndroid() {
+  return /android/i.test(navigator.userAgent || "");
+}
+
+function istIOS() {
+  const ua = navigator.userAgent || "";
+  // iPadOS meldet sich seit Version 13 als Macintosh, deshalb zusätzlich auf
+  // Touch prüfen.
+  return (
+    /iphone|ipad|ipod/i.test(ua) ||
+    (/macintosh/i.test(ua) && navigator.maxTouchPoints > 1)
+  );
+}
+
+let lastSongWindow = null;
+
+function oeffneImTab(url) {
+  if (lastSongWindow && !lastSongWindow.closed) {
+    lastSongWindow.close();
+  }
+  // noopener/noreferrer weglassen, damit wir eine Referenz zum Schließen behalten
+  // (Spotify als vertrauenswürdige Domain hat keinen Zugriff auf window.opener).
+  lastSongWindow = window.open(url, "_blank");
+}
+
+/**
+ * Versucht, den Song in der Spotify-App zu öffnen.
+ *
+ * Rückgabe: true, wenn der Versuch abgesetzt wurde. Ob die App wirklich
+ * aufgeht, lässt sich nicht direkt abfragen – deshalb im Auto-Modus der
+ * Rückfall über einen Timer: Ist die Seite nach kurzer Zeit noch sichtbar,
+ * hat offenbar nichts übernommen.
+ */
+function versucheApp(id, mitRueckfall) {
+  const webUrl = `https://open.spotify.com/track/${id}`;
+
+  // Android Chrome: Intent-URL kann den Rückfall selbst übernehmen, das ist
+  // zuverlässiger als jede Timer-Heuristik.
+  if (istAndroid() && mitRueckfall) {
+    const fallback = encodeURIComponent(webUrl);
+    window.location.href =
+      `intent://track/${id}#Intent;scheme=spotify;` +
+      `package=com.spotify.music;S.browser_fallback_url=${fallback};end`;
+    return;
+  }
+
+  const appUrl = `spotify:track:${id}`;
+
+  if (!mitRueckfall) {
+    window.location.href = appUrl;
+    return;
+  }
+
+  // Auto-Modus: Protokoll anstoßen und beobachten, ob die Seite in den
+  // Hintergrund geht. Tut sie das, hat die App übernommen.
+  let abgewandert = false;
+  const merken = () => {
+    if (document.visibilityState === "hidden") abgewandert = true;
+  };
+  document.addEventListener("visibilitychange", merken);
+  window.addEventListener("pagehide", merken);
+  window.addEventListener("blur", merken);
+
+  if (istIOS()) {
+    // iOS blockiert location-Wechsel auf unbekannte Protokolle teils mit einer
+    // Fehlerseite; ein verstecktes iframe ist dort der schonendere Weg.
+    const rahmen = document.createElement("iframe");
+    rahmen.style.display = "none";
+    rahmen.src = appUrl;
+    document.body.appendChild(rahmen);
+    setTimeout(() => rahmen.remove(), 1500);
+  } else {
+    window.location.href = appUrl;
+  }
+
+  setTimeout(() => {
+    document.removeEventListener("visibilitychange", merken);
+    window.removeEventListener("pagehide", merken);
+    window.removeEventListener("blur", merken);
+    if (!abgewandert && document.visibilityState === "visible") {
+      oeffneImTab(webUrl);
+    }
+  }, 1600);
+}
 
 export function openSongTab(url) {
   if (!url) return;
@@ -21,11 +145,14 @@ export function openSongTab(url) {
     return;
   }
 
-  // Web: vorherigen Tab schließen, neuen öffnen.
-  if (lastSongWindow && !lastSongWindow.closed) {
-    lastSongWindow.close();
+  const id = trackId(url);
+  const modus = getSongOpenMode();
+
+  // Ohne erkennbare Track-Kennung bleibt nur der Tab.
+  if (!id || modus === "browser") {
+    oeffneImTab(url);
+    return;
   }
-  // noopener/noreferrer weglassen, damit wir eine Referenz zum Schließen behalten
-  // (Spotify als vertrauenswürdige Domain hat keinen Zugriff auf window.opener).
-  lastSongWindow = window.open(url, "_blank");
+
+  versucheApp(id, modus === "auto");
 }

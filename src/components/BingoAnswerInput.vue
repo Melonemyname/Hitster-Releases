@@ -167,6 +167,11 @@ export default {
   justify-content: center;
 }
 .bingo-answer__btn {
-  min-width: 160px;
+  /* Zwei Knoepfe mit je 160px plus 12px Luecke sind 332px breit und passten
+     damit knapp nicht in die rund 327px eines 375px-Schirms. `flex: 0 1 160px`
+     laesst sie bei Bedarf schrumpfen (statt zu stapeln), auf breiten Fenstern
+     bleiben sie unveraendert bei 160px, weil sie nicht wachsen duerfen. */
+  flex: 0 1 160px;
+  min-width: 0;
 }
 </style>

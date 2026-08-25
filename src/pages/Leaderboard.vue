@@ -1,7 +1,7 @@
 <template>
   <q-page class="leaderboard-page">
     <div class="leaderboard-container">
-      <div class="row items-center q-mb-lg">
+      <div class="row items-center q-mb-lg head-fab-space">
         <q-btn flat round icon="arrow_back" @click="goBack" />
         <div class="text-h5 q-ml-sm">Rangliste</div>
         <q-space />
@@ -38,10 +38,15 @@
               </q-avatar>
             </q-item-section>
             <q-item-section>
-              <q-item-label>{{ row.username }}</q-item-label>
+              <!-- Namen duerfen 40 Zeichen lang sein (server/auth.js). Ohne
+                   Kuerzung wuchs die Zeile auf drei Zeilen und die Chips
+                   rutschten mit nach unten. -->
+              <q-item-label class="ellipsis" :title="row.username">
+                {{ row.username }}
+              </q-item-label>
               <q-item-label caption>{{ row.gamesPlayed }} Spiele</q-item-label>
             </q-item-section>
-            <q-item-section side>
+            <q-item-section side class="lb-stats">
               <div class="row items-center no-wrap" style="gap: 6px">
                 <q-chip dense square icon="stars">{{ row.totalPoints }}</q-chip>
                 <q-chip dense square icon="emoji_events">{{ row.wins }}</q-chip>
@@ -129,5 +134,33 @@ export default {
 .lb-rank--3 {
   background: var(--app-accent, #1976d2);
   color: var(--app-on-accent, #fff);
+}
+/* Die Punkte-/Siege-Chips behalten ihre Breite, gekuerzt wird der Name. */
+.lb-stats {
+  flex-shrink: 0;
+}
+
+/* ── Schmale Bildschirme ────────────────────────────────────────────────
+   Fuer den Namen blieben von 375px nur rund 50px uebrig (Rang, Avatar-Spalte
+   mit Quasars 56px-Mindestmass, Chips). Deshalb die Polster verkleinern und
+   die Avatar-Spalte auf ihre echte Breite bringen. */
+@media (max-width: 599px) {
+  .leaderboard-container {
+    padding: 16px 8px 32px;
+  }
+  .lb-card :deep(.q-item) {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+  .lb-card :deep(.q-item__section--avatar) {
+    min-width: 0;
+    padding-right: 10px;
+  }
+  .lb-stats {
+    padding-left: 8px;
+  }
+  .lb-stats :deep(.q-chip) {
+    font-size: 0.7rem;
+  }
 }
 </style>

@@ -32,9 +32,12 @@
                 <img class="version-icon" :src="v.icon" :alt="v.label" />
               </q-card-section>
             </q-card>
-            <div class="version-name">{{ v.label }}</div>
-            <div v-if="v.imported" class="text-caption" style="opacity: 0.6">
-              {{ v.trackCount }} Songs
+            <div class="version-name" :title="v.label">{{ v.label }}</div>
+            <!-- Die Zeile bleibt auch ohne Songzahl stehen (leer), sonst sitzt
+                 die Aktionsreihe je nach Versionsart unterschiedlich tief und
+                 die Knöpfe einer Rasterreihe fluchten nicht. -->
+            <div class="version-track-count text-caption" style="opacity: 0.6">
+              <template v-if="v.imported">{{ v.trackCount }} Songs</template>
             </div>
             <div class="version-manage-actions">
               <q-btn
@@ -741,6 +744,11 @@ export default {
 .version-manage-item--hidden {
   opacity: 0.4;
 }
+/* Platzhalter-Höhe, damit Kacheln mit und ohne Songzahl gleich hoch bleiben. */
+.version-track-count {
+  min-height: 1.25em;
+  line-height: 1.25;
+}
 /* Eine eigene Film-Version bringt es auf sechs Aktionen (Ausblenden, Sync,
    Bearbeiten, Filme, Freigeben, Loeschen). Die passen nicht in eine Spalte des
    Vier-Spalten-Rasters, deshalb umbrechen statt ueber den Rand schieben. */
@@ -782,5 +790,27 @@ export default {
 }
 .cover-option--active {
   border-color: var(--app-accent);
+}
+
+/* ── Schmale Bildschirme ────────────────────────────────────────────────
+   Das Raster geht bereits auf zwei Spalten (app.scss). Hier vor allem die
+   Aktionsreihe: Eine eigene Film-Version bringt es auf fuenf Knoepfe, die
+   in einer halben Handy-Breite nicht nebeneinander passen. */
+@media (max-width: 599px) {
+  .version-manage-actions {
+    gap: 0;
+  }
+  .version-manage-actions :deep(.q-btn) {
+    padding: 2px;
+    min-height: 28px;
+  }
+  .version-name {
+    font-size: 0.82rem;
+    line-height: 1.2;
+  }
+  .cover-option {
+    width: 44px;
+    height: 44px;
+  }
 }
 </style>

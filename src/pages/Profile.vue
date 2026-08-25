@@ -20,27 +20,34 @@
             </q-avatar>
             <div class="q-ml-md col">
               <div class="text-subtitle1 q-mb-sm">Profilbild</div>
+              <!-- Neben dem 88px-Avatar bleiben auf dem Handy nur rund 207px;
+                   mit Beschriftung brauchen beide Knoepfe ~233px und rutschen
+                   untereinander. Unter 600px deshalb nur die Icons. -->
               <q-btn
                 color="primary"
                 icon="upload"
-                label="Bild wählen"
                 :loading="avatarLoading"
                 dense
                 no-caps
+                aria-label="Profilbild wählen"
                 @click="pickAvatar"
-              />
+              >
+                <span class="gt-xs q-ml-sm">Bild wählen</span>
+              </q-btn>
               <q-btn
                 v-if="profile.avatar"
                 flat
                 color="grey"
                 icon="delete"
-                label="Entfernen"
                 :disable="avatarLoading"
                 dense
                 no-caps
                 class="q-ml-sm"
+                aria-label="Profilbild entfernen"
                 @click="onRemoveAvatar"
-              />
+              >
+                <span class="gt-xs q-ml-sm">Entfernen</span>
+              </q-btn>
               <input
                 ref="fileInput"
                 type="file"

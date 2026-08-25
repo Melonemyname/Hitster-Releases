@@ -1,7 +1,7 @@
 <template>
   <q-page class="stats-page">
     <div class="stats-container">
-      <div class="row items-center q-mb-lg">
+      <div class="row items-center q-mb-lg head-fab-space">
         <q-btn flat round icon="arrow_back" @click="goBack" />
         <div class="text-h5 q-ml-sm">Profil</div>
         <q-space />
@@ -27,7 +27,13 @@
               />
               <q-icon v-else name="person" size="40px" />
             </q-avatar>
-            <div class="text-h5 q-ml-md">{{ data.username }}</div>
+            <!-- `col` + `ellipsis` sind hier Pflicht: die Reihe ist `no-wrap`,
+                 ein Name ohne Trennmoeglichkeit kann sonst nicht schrumpfen
+                 und schiebt die ganze Seite seitlich auf (gemessen: 450px
+                 Scrollbreite bei 375px Viewport). -->
+            <div class="text-h5 q-ml-md col ellipsis" :title="data.username">
+              {{ data.username }}
+            </div>
           </q-card-section>
         </q-card>
 
@@ -58,8 +64,11 @@
               <q-item-section>
                 <q-item-label>Meistgespielter Modus</q-item-label>
               </q-item-section>
-              <q-item-section side>
-                <q-item-label class="stats-value">
+              <q-item-section side class="stats-value-section">
+                <q-item-label
+                  class="stats-value ellipsis"
+                  :title="modeLabel(mostPlayedMode.key)"
+                >
                   {{ modeLabel(mostPlayedMode.key) }}
                 </q-item-label>
               </q-item-section>
@@ -68,8 +77,11 @@
               <q-item-section>
                 <q-item-label>Meistgespielte Version</q-item-label>
               </q-item-section>
-              <q-item-section side>
-                <q-item-label class="stats-value">
+              <q-item-section side class="stats-value-section">
+                <q-item-label
+                  class="stats-value ellipsis"
+                  :title="versionLabel(mostPlayedVersion.key)"
+                >
                   {{ versionLabel(mostPlayedVersion.key) }}
                 </q-item-label>
               </q-item-section>
@@ -78,8 +90,11 @@
               <q-item-section>
                 <q-item-label>Modus mit meisten Punkten</q-item-label>
               </q-item-section>
-              <q-item-section side>
-                <q-item-label class="stats-value">
+              <q-item-section side class="stats-value-section">
+                <q-item-label
+                  class="stats-value ellipsis"
+                  :title="modeLabel(modeMostPoints.key)"
+                >
                   {{ modeLabel(modeMostPoints.key) }}
                 </q-item-label>
               </q-item-section>
@@ -88,8 +103,11 @@
               <q-item-section>
                 <q-item-label>Version mit meisten Punkten</q-item-label>
               </q-item-section>
-              <q-item-section side>
-                <q-item-label class="stats-value">
+              <q-item-section side class="stats-value-section">
+                <q-item-label
+                  class="stats-value ellipsis"
+                  :title="versionLabel(versionMostPoints.key)"
+                >
                   {{ versionLabel(versionMostPoints.key) }}
                 </q-item-label>
               </q-item-section>
@@ -98,8 +116,11 @@
               <q-item-section>
                 <q-item-label>Modus mit meisten Siegen</q-item-label>
               </q-item-section>
-              <q-item-section side>
-                <q-item-label class="stats-value">
+              <q-item-section side class="stats-value-section">
+                <q-item-label
+                  class="stats-value ellipsis"
+                  :title="modeLabel(modeMostWins.key)"
+                >
                   {{ modeLabel(modeMostWins.key) }}
                 </q-item-label>
               </q-item-section>
@@ -108,8 +129,11 @@
               <q-item-section>
                 <q-item-label>Version mit meisten Siegen</q-item-label>
               </q-item-section>
-              <q-item-section side>
-                <q-item-label class="stats-value">
+              <q-item-section side class="stats-value-section">
+                <q-item-label
+                  class="stats-value ellipsis"
+                  :title="versionLabel(versionMostWins.key)"
+                >
                   {{ versionLabel(versionMostWins.key) }}
                 </q-item-label>
               </q-item-section>
@@ -287,5 +311,11 @@ export default {
 .stats-value {
   font-weight: 600;
   text-align: right;
+}
+/* Die Wert-Spalte will von sich aus ihre volle Textbreite. Ein langer
+   Versionsname quetschte damit die Beschriftung links auf wenige Pixel
+   zusammen. Deckel drauf, gekuerzt wird rechts (Ellipse + `title`). */
+.stats-value-section {
+  max-width: 55%;
 }
 </style>

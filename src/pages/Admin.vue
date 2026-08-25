@@ -1,8 +1,8 @@
 <template>
   <q-page class="admin-page">
     <div class="admin-shell">
-      <div class="row items-center justify-between q-mb-md">
-        <div class="row items-center no-wrap">
+      <div class="row items-center justify-between q-mb-md admin-head">
+        <div class="row items-center no-wrap admin-title">
           <q-btn
             flat
             round
@@ -27,6 +27,7 @@
           color="primary"
           icon="person_add"
           label="Nutzer anlegen"
+          class="admin-create-btn"
           @click="openCreateDialog"
         />
       </div>
@@ -60,8 +61,14 @@
                   </q-avatar>
                 </q-item-section>
                 <q-item-section>
-                  <q-item-label>
-                    {{ u.username }}
+                  <!-- Name und Abzeichen bleiben in EINER Zeile: ein langer
+                       Name wird abgeschnitten statt umgebrochen. Sonst wuchs
+                       die Zeile (gemessen 80px -> 107px) und die Aktionen der
+                       Nutzerzeilen sassen unterschiedlich tief. -->
+                  <q-item-label class="row items-center no-wrap admin-user-line">
+                    <span class="ellipsis" :title="u.username">
+                      {{ u.username }}
+                    </span>
                     <q-badge v-if="u.isAdmin" color="primary" class="q-ml-xs">
                       Admin
                     </q-badge>
@@ -506,6 +513,42 @@ export default {
   flex-direction: row;
   align-items: center;
   gap: 4px;
+}
+/* Der Name gibt nach (wird per `ellipsis` gekuerzt), die Abzeichen behalten
+   ihre Breite - sonst quetscht der Browser lieber die Abzeichen zusammen. */
+.admin-user-line .q-badge {
+  flex: 0 0 auto;
+}
+
+/* ── Schmale Bildschirme ────────────────────────────────────────────────
+   Kopfzeile und Nutzerzeilen brechen um, statt seitlich hinauszulaufen. */
+@media (max-width: 599px) {
+  .admin-shell {
+    padding: 16px 8px 32px;
+  }
+  .admin-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  /* `no-wrap` am Titel wuerde den Erklaertext neben dem Zurueck-Pfeil
+     zusammenquetschen; auf dem Handy darf er umbrechen. */
+  .admin-title {
+    flex-wrap: wrap !important;
+  }
+  .admin-create-btn {
+    width: 100%;
+  }
+  /* Nutzerzeile: Name oben, Aktionen darunter, statt alles nebeneinander. */
+  .admin-card :deep(.q-item) {
+    flex-wrap: wrap;
+  }
+  .admin-card :deep(.admin-actions) {
+    width: 100%;
+    justify-content: flex-end;
+    padding-left: 0;
+    margin-top: 4px;
+  }
 }
 .admin-card {
   background: var(--surface-bg, rgba(255, 255, 255, 0.04));

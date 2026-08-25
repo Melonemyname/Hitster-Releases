@@ -185,15 +185,24 @@
                 />
               </q-item-section>
               <q-item-section>
-                <q-item-label>{{ slot.slotName }}</q-item-label>
-                <q-item-label caption>
+                <!-- Team-Slots heissen „NameA & NameB" und Namen duerfen 40
+                     Zeichen lang sein: kuerzen statt umbrechen. -->
+                <q-item-label class="ellipsis" :title="slot.slotName">
+                  {{ slot.slotName }}
+                </q-item-label>
+                <q-item-label
+                  caption
+                  class="ellipsis"
+                  :title="slot.members.join(' & ')"
+                >
                   {{ slot.members.join(" & ") }}
                 </q-item-label>
                 <!-- Battle-Modus: gewaehlte Version pro Slot als Zeile -->
                 <q-item-label
                   v-if="activeRoomGameMode === 'battle'"
                   caption
-                  class="q-mt-xs"
+                  class="q-mt-xs ellipsis"
+                  :title="slot.pool ? getVersionLabel(slot.pool) : ''"
                 >
                   <span v-if="slot.pool" style="opacity: 0.9">
                     <q-icon name="album" size="xs" class="q-mr-xs" />
@@ -205,7 +214,7 @@
                   </span>
                 </q-item-label>
               </q-item-section>
-              <q-item-section side>
+              <q-item-section side class="slot-badges">
                 <div class="row items-center" style="gap: 4px">
                   <q-badge v-if="slot.members.includes(currentUsername)">
                     Du
@@ -222,17 +231,28 @@
 
           <!-- Battle-Modus: eigene Version waehlen -->
           <div v-if="activeRoomGameMode === 'battle'" class="q-mb-md">
+            <!-- Der Versionsname kann lang sein. Als `label` brach der Knopf
+                 auf drei Zeilen um (q-btn setzt `nowrap` nur mit dem
+                 `no-wrap`-Prop) und schob alles darunter nach unten. Deshalb
+                 einzeilig mit Ellipse; der volle Name steht im `title`. -->
             <q-btn
               color="primary"
               icon="album"
-              :label="
-                mySlotPool
-                  ? `Meine Version: ${getVersionLabel(mySlotPool)} (ändern)`
-                  : 'Meine Version wählen'
-              "
+              no-wrap
               class="full-width"
               @click="openBattlePoolDialog"
-            />
+            >
+              <span
+                class="ellipsis q-ml-sm"
+                :title="mySlotPool ? getVersionLabel(mySlotPool) : ''"
+              >
+                {{
+                  mySlotPool
+                    ? `Meine Version: ${getVersionLabel(mySlotPool)}`
+                    : "Meine Version wählen"
+                }}
+              </span>
+            </q-btn>
             <div
               v-if="battleStartBlocker"
               class="text-caption text-warning q-mt-xs"
@@ -264,10 +284,12 @@
                 v-if="isHost"
                 color="primary"
                 icon="edit"
-                label="Ändern"
                 size="sm"
+                aria-label="Song-Versionen ändern"
                 @click="openVersionDialog"
-              />
+              >
+                <span class="gt-xs q-ml-sm">Ändern</span>
+              </q-btn>
             </div>
             <div v-if="activeSongPoolOptions.length" class="active-pools-row">
               <div
@@ -300,21 +322,31 @@
               <q-btn
                 dense
                 no-caps
+                no-wrap
                 icon="casino"
-                label="Auslosen"
                 :class="{ 'btn-unselected': startingPlayerChoice !== null }"
                 @click="setStartingPlayer(null)"
-              />
+              >
+                <span class="q-ml-sm">Auslosen</span>
+              </q-btn>
+              <!-- Team-Slots heissen „NameA & NameB" und werden lang. Als
+                   `label` brach der Text um und die Knoepfe einer Reihe waren
+                   unterschiedlich hoch. Einzeilig kuerzen, voller Name im
+                   `title`. -->
               <q-btn
                 v-for="(slot, index) in activeRoom.players"
                 :key="slot.id || index"
                 dense
                 no-caps
+                no-wrap
                 :icon="startingPlayerChoice === index ? 'check' : 'person'"
                 :class="{ 'btn-unselected': startingPlayerChoice !== index }"
-                :label="slotLabel(slot, index)"
                 @click="setStartingPlayer(index)"
-              />
+              >
+                <span class="ellipsis q-ml-sm" :title="slotLabel(slot, index)">
+                  {{ slotLabel(slot, index) }}
+                </span>
+              </q-btn>
             </div>
             <div v-else class="text-caption text-grey">
               {{ startingPlayerText }}
@@ -435,7 +467,7 @@
                       />
                     </q-card-section>
                   </q-card>
-                  <div class="version-name">
+                  <div class="version-name" :title="opt.label">
                     {{ opt.label }}
                     <span
                       v-if="isFilmBlocked(opt)"
@@ -539,18 +571,22 @@
                 <q-icon name="manage_history" class="q-mr-xs" />
                 Als wer spielst du?
               </div>
-              <div class="row q-gutter-xs q-mb-sm">
+              <div class="row q-gutter-xs q-mb-sm saved-name-choice">
                 <!-- Auswahl ueber `btn-unselected`, nicht ueber `outline`:
                      app.scss fuellt rechteckige Buttons per !important mit dem
                      Akzent, `outline`/`color` bleiben dadurch wirkungslos. -->
+                <!-- Beschriftung einzeilig kuerzen wie bei `.starter-choice`,
+                     sonst werden die Knoepfe einer Reihe unterschiedlich hoch. -->
                 <q-btn
                   v-for="name in savedPlayerNames"
                   :key="name"
                   :class="{ 'btn-unselected': hostSlotName !== name }"
                   size="sm"
-                  :label="name"
+                  no-wrap
                   @click="hostSlotName = name"
-                />
+                >
+                  <span class="ellipsis" :title="name">{{ name }}</span>
+                </q-btn>
               </div>
             </div>
 
@@ -636,13 +672,24 @@
                     />
                   </q-item-section>
                   <q-item-section>
-                    <q-item-label>{{ slot.slotName }}</q-item-label>
-                    <q-item-label caption>
+                    <q-item-label class="ellipsis" :title="slot.slotName">
+                      {{ slot.slotName }}
+                    </q-item-label>
+                    <q-item-label
+                      caption
+                      class="ellipsis"
+                      :title="slot.members.join(' & ')"
+                    >
                       {{ slot.members.join(" & ") }}
                     </q-item-label>
                   </q-item-section>
-                  <q-item-section side>
-                    <q-badge color="blue"> Als Team beitreten </q-badge>
+                  <!-- Das lange Badge liess dem Namen nur rund 73px. Unter
+                       600px deshalb die Kurzform. -->
+                  <q-item-section side class="slot-badges">
+                    <q-badge color="blue">
+                      <span class="gt-xs">Als Team beitreten</span>
+                      <span class="lt-sm">Team</span>
+                    </q-badge>
                   </q-item-section>
                 </q-item>
 
@@ -683,8 +730,10 @@
                       />
                     </q-item-section>
                     <q-item-section>
-                      <q-item-label>{{ savedName }}</q-item-label>
-                      <q-item-label caption>
+                      <q-item-label class="ellipsis" :title="savedName">
+                        {{ savedName }}
+                      </q-item-label>
+                      <q-item-label caption class="ellipsis">
                         {{
                           foundRoom.players.find(
                             (s) => s.slotName === savedName,
@@ -696,7 +745,7 @@
                         }}
                       </q-item-label>
                     </q-item-section>
-                    <q-item-section side>
+                    <q-item-section side class="slot-badges">
                       <q-badge
                         :color="
                           foundRoom.players.find(
@@ -809,7 +858,7 @@
           </div>
           <div v-else>Kein lokaler Spielstand gefunden.</div>
         </q-card-section>
-        <q-card-actions align="right" class="q-pa-md">
+        <q-card-actions align="right" class="q-pa-md stacked-actions">
           <q-btn
             flat
             color="grey-7"
@@ -865,7 +914,7 @@
                   <img class="version-icon" :src="opt.icon" :alt="opt.label" />
                 </q-card-section>
               </q-card>
-              <div class="version-name">{{ opt.label }}</div>
+              <div class="version-name" :title="opt.label">{{ opt.label }}</div>
             </button>
           </div>
         </q-card-section>
@@ -920,7 +969,7 @@
                   <img class="version-icon" :src="opt.icon" :alt="opt.label" />
                 </q-card-section>
               </q-card>
-              <div class="version-name">
+              <div class="version-name" :title="opt.label">
                 {{ opt.label }}
                 <span
                   v-if="opt.trackCount"
@@ -2004,6 +2053,17 @@ export default {
   .version-grid--wide {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  /* Auf Touch sind zwei ineinander liegende Scrollbereiche unangenehm. Die
+     Dialogkarte scrollt bereits (zentrale Regel in app.scss), deshalb hier
+     die eigene Deckelung aufheben. Ohne `overflow` braucht es auch die
+     Polster-/Aussenabstand-Kompensation fuer den Auswahlring nicht mehr. */
+  .versionen-dialog-grid {
+    max-height: none;
+    overflow: visible;
+    padding: 0;
+    margin: 0;
+  }
 }
 
 /* ========== RESPONSIVE / MOBILE ========== */
@@ -2075,6 +2135,18 @@ export default {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+/* Ein einzelner Knopf darf nie breiter als die Reihe werden; gekuerzt wird
+   die Beschriftung (siehe `ellipsis` im Template), nicht der Knopf. */
+.starter-choice .q-btn,
+.saved-name-choice .q-btn {
+  max-width: 100%;
+}
+
+/* Die Abzeichen rechts in den Slot-Listen behalten ihre Breite, gekuerzt
+   werden die Namen links. */
+.slot-badges {
+  flex-shrink: 0;
 }
 
 

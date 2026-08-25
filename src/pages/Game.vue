@@ -12,13 +12,17 @@
              der Rate-Bereich (mit Button) in eigenen Flächen liegen. -->
         <div class="bingo-header-panel">
           <div class="bingo-header">
+            <!-- Beschriftung faellt unter 600px weg, das Icon bleibt (gleiches
+                 Muster wie im Kopf der anderen Modi). -->
             <q-btn
               flat
               color="grey"
               icon="logout"
-              label="Lobby"
+              aria-label="Zurück zur Lobby"
               @click="handleEndGame"
-            />
+            >
+              <span class="gt-xs q-ml-sm">Lobby</span>
+            </q-btn>
             <div class="bingo-header__chips">
               <q-chip
                 :color="
@@ -212,17 +216,26 @@
                   </q-chip>
                 </template>
                 <template v-if="multiplayerIsHost">
+                  <!-- Auflösen/Skip/Timer-Umschalter zusammen breiter als ein
+                       Handy-Schirm. Unter 600px bleiben nur die Icons. -->
                   <q-btn
                     color="positive"
                     icon="check"
-                    :label="
+                    size="sm"
+                    :aria-label="
                       bingoAllTeamsAnswered
                         ? 'Runde auflösen'
                         : 'Trotzdem auflösen'
                     "
-                    size="sm"
                     @click="onBingoResolveRound"
                   >
+                    <span class="gt-xs q-ml-sm">
+                      {{
+                        bingoAllTeamsAnswered
+                          ? "Runde auflösen"
+                          : "Trotzdem auflösen"
+                      }}
+                    </span>
                     <q-tooltip v-if="!bingoAllTeamsAnswered">
                       Es haben noch nicht alle Teams geantwortet ({{
                         bingoAnsweredCount
@@ -234,10 +247,12 @@
                     outline
                     color="warning"
                     icon="skip_next"
-                    label="Skip"
                     size="sm"
+                    aria-label="Runde überspringen"
                     @click="onBingoSkipRound"
-                  />
+                  >
+                    <span class="gt-xs q-ml-sm">Skip</span>
+                  </q-btn>
                   <q-btn-toggle
                     :model-value="bingoSettings.timerMode"
                     :options="[
@@ -731,9 +746,15 @@
             size="lg"
             class="q-ml-sm"
             clickable
+            :aria-label="`Raumcode ${multiplayerRoomCode} kopieren`"
             @click="copyRoomCode"
           >
-            {{ multiplayerRoomCode }}
+            <!-- Der Code selbst faellt unter 600px weg: die Kopfzeile war mit
+                 ihm breiter als der Schirm und `.game-page { overflow: hidden }`
+                 schnitt rechts Info-Knopf und Zahnrad ab. Das Kopier-Symbol
+                 bleibt, der Chip legt den Code weiterhin in die Zwischenablage.
+                 In der Lobby bleibt der Code sichtbar (dort ist Platz). -->
+            <span class="gt-xs">{{ multiplayerRoomCode }}</span>
             <q-icon name="content_copy" size="xs" class="q-ml-xs" />
             <q-tooltip>
               Klicken zum Kopieren ·
@@ -1487,17 +1508,23 @@
             </div>
 
             <template v-for="(player, idx) in playerTimelines" :key="idx">
+              <!-- Einzeilig halten: bei langen Namen brach die Reihe um und
+                   der Knopf rutschte auf eine eigene Zeile - mitten in einer
+                   10-Sekunden-Entscheidung. Gekuerzt wird der Name. -->
               <div
                 v-if="idx !== currentPlayerIndex"
-                class="row items-center justify-between q-mb-sm"
+                class="row items-center justify-between q-mb-sm no-wrap"
               >
-                <div class="row items-center">
-                  <strong>{{ player.name }}</strong>
-                  <q-chip dense class="q-ml-sm">
+                <div class="row items-center no-wrap col">
+                  <strong class="ellipsis" :title="player.name">{{
+                    player.name
+                  }}</strong>
+                  <q-chip dense class="q-ml-sm objection-optin__chip">
                     {{ player.objections }} Einwände
                   </q-chip>
                 </div>
                 <q-btn
+                  class="objection-optin__btn"
                   size="sm"
                   :label="
                     objectionOptIns.includes(idx) ? 'Angemeldet ✓' : 'Einwand'
@@ -1580,9 +1607,11 @@
                   size="30px"
                   :overlap="10"
                 />
-                <span class="text-h6">{{
-                  player.name || `Spieler ${index + 1}`
-                }}</span>
+                <span
+                  class="text-h6"
+                  :title="player.name || `Spieler ${index + 1}`"
+                  >{{ player.name || `Spieler ${index + 1}` }}</span
+                >
               </span>
               <div class="player-chips">
                 <!-- Battle-Modus: gewählte Version pro Spieler anzeigen,
@@ -1905,7 +1934,7 @@
             </div>
           </q-card-section>
 
-          <q-card-actions align="center" class="q-pa-md">
+          <q-card-actions align="center" class="q-pa-md victory-actions">
             <q-btn
               color="positive"
               label="Erneut spielen"

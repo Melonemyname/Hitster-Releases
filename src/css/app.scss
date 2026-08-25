@@ -384,6 +384,21 @@ $cyan: #00bcd4;
 .version-name {
   margin-top: 8px;
   font-weight: 700;
+  /* Lange Versionsnamen brachen bisher auf drei Zeilen um. Weil alle Kacheln
+     einer Rasterreihe nebeneinander stehen, rutschte die Aktionsreihe der
+     langen Kachel nach unten und die Knöpfe sassen unterschiedlich tief
+     (auf 375px gemessen: 31px Versatz). Deshalb hart auf zwei Zeilen mit
+     Auslassungszeichen begrenzen und die Höhe fest vorgeben, damit jede
+     Kachel gleich hoch ist. Der volle Name steht im `title`-Attribut. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  /* Sonst schiebt ein einzelnes überlanges Wort die Kachel seitlich auf. */
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+  height: 2.5em;
 }
 .version-card-btn:hover .timeline-look-card {
   transform: translateY(-6px) scale(1.02);
@@ -437,6 +452,22 @@ $cyan: #00bcd4;
   }
 }
 
+/* ── Platz für das globale Konto-FAB ──────────────────────────────────────
+   `.top-fabs` (MainLayout.vue) liegt fest oben rechts und mit z-index 4000
+   über allem. Auf breiten Schirmen ist der Inhalt auf 1180px zentriert, es
+   bleibt also Rand. Auf dem Handy sitzt er bündig am rechten Rand, und ein
+   Knopf oben rechts verschwindet unter dem FAB (gemessen auf 375px:
+   FAB x 338–363, Aktualisieren-Knopf x 317–359).
+
+   Diese Klasse gehört an jede Kopfzeile, die rechts ein Bedienelement trägt.
+   `.game-info-right` in Game.scss löst dasselbe seit jeher über ein eigenes
+   `padding-right`; neue Seiten nutzen bitte diese zentrale Klasse. */
+@media (max-width: 599px) {
+  .head-fab-space {
+    padding-right: 44px;
+  }
+}
+
 /* ========== GLOBALE DIALOG-STYLES ========== */
 
 /* Kleine App-weite Gap-Utility (Flex-Kinder). Wird u.a. im Bingo-Header
@@ -447,10 +478,50 @@ $cyan: #00bcd4;
 .gap-md { gap: 12px; }
 .gap-lg { gap: 20px; }
 
+/* ── Dialoge auf schmalen Bildschirmen ────────────────────────────────────
+   Viele Dialoge tragen eine feste `min-width` (380–500px), die auf einem
+   Handy breiter ist als der Bildschirm. Zentral aufheben, damit nicht jeder
+   Dialog einzeln nachgezogen werden muss – auch künftige.
+
+   WICHTIG: nur die ÄUSSERE Karte des Dialogs, nicht `.q-dialog .q-card`.
+   Letzteres trifft auch verschachtelte Karten (die Versions-Kacheln im
+   Raster, die Bingo-Karten) und bläst sie auf 92vw auf, was das Raster
+   sprengt. Deshalb der Kindselektor auf `.q-dialog__inner`. */
 @media (max-width: 599px) {
-  .q-dialog .q-card {
-    min-width: unset !important;
-    width: 92vw !important;
-    max-width: 92vw !important;
+  .q-dialog__inner > .q-card,
+  .q-dialog__inner > form > .q-card,
+  .q-dialog__inner > div > .q-card {
+    min-width: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  /* Quasar rahmt Dialoge mit 24px – auf dem Handy zu viel des Guten. */
+  .q-dialog__inner--minimized {
+    padding: 10px;
+  }
+
+  /* Kopf- und Fußzeilen der Dialoge dürfen umbrechen statt überzulaufen. */
+  .q-dialog__inner .q-card__actions {
+    flex-wrap: wrap;
+  }
+
+  /* Fußzeilen mit drei Aktionen (Abbrechen / Aus Browser laden / Datei
+     auswählen) sind zusammen rund 380px breit. Statt sie ungleich umbrechen
+     zu lassen, stehen sie untereinander und über die volle Breite. */
+  .stacked-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .stacked-actions .q-btn {
+    width: 100%;
+    margin-left: 0 !important;
+  }
+
+  /* Sehr lange Dialoge (Editor, Versionen) sollen scrollen statt aus dem
+     Bild zu wachsen. */
+  .q-dialog__inner > .q-card {
+    max-height: 92vh;
+    overflow-y: auto;
   }
 }

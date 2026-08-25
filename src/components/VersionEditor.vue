@@ -335,4 +335,16 @@ export default {
   width: 560px;
   max-width: 94vw;
 }
+
+/* Auf dem Handy stehen CSV-Knopf und Song-Zaehler untereinander statt
+   nebeneinander, sonst wird der Knopf unlesbar schmal. */
+@media (max-width: 599px) {
+  .editor-card :deep(.row.items-center.q-gutter-sm) {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .editor-card :deep(.row.items-center.q-gutter-sm > .col) {
+    width: 100%;
+  }
+}
 </style>

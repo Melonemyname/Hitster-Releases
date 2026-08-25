@@ -49,7 +49,11 @@
               <q-item-section avatar>
                 <q-checkbox v-model="selected" :val="u.id" color="primary" />
               </q-item-section>
-              <q-item-section>{{ u.username }}</q-item-section>
+              <q-item-section>
+                <q-item-label class="ellipsis" :title="u.username">
+                  {{ u.username }}
+                </q-item-label>
+              </q-item-section>
             </q-item>
           </q-list>
         </template>

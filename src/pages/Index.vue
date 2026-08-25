@@ -111,7 +111,7 @@
                         />
                       </q-card-section>
                     </q-card>
-                    <div class="version-name">
+                    <div class="version-name" :title="option.label">
                       {{ option.label }}
                       <span
                         v-if="isFilmBlocked(option)"
@@ -309,7 +309,7 @@
                       />
                     </q-card-section>
                   </q-card>
-                  <div class="version-name">
+                  <div class="version-name" :title="option.label">
                     {{ option.label }}
                     <span
                       v-if="option.trackCount"
@@ -403,7 +403,7 @@
           </div>
           <div v-else>Kein lokaler Spielstand gefunden.</div>
         </q-card-section>
-        <q-card-actions align="right" class="q-pa-md">
+        <q-card-actions align="right" class="q-pa-md stacked-actions">
           <q-btn
             flat
             color="grey-7"

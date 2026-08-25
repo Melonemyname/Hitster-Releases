@@ -1,5 +1,69 @@
 # Changelog
 
+## 2026-08-20 – Version 1.0.2: Bedienbar auf dem Handy, Songs öffnen in der App
+
+### Zwei Bedienelemente waren auf dem Handy nicht erreichbar
+
+- **Spielansicht: Info-Knopf und Zahnrad lagen außerhalb des Bildschirms.** Die
+  Kopfzeile war 471 Pixel breit bei 375 Pixel Bildschirm. Weil der Seitencontainer
+  Überstehendes verbirgt, entstand kein seitliches Scrollen, die Knöpfe wurden
+  einfach abgeschnitten, und eine Prüfung auf Scrollbreite meldete nichts
+  Auffälliges. Ursache war eine Kopfzeile ohne Breitendeckel, verschärft dadurch,
+  dass die Chips ihre Schriftgröße als Inline-Stil setzen und die vorhandene
+  Mobil-Regel dagegen wirkungslos blieb. Der Raumcode zeigt jetzt nur noch das
+  Kopier-Symbol (in der Lobby steht er weiter ausgeschrieben), die Kopfzeile misst
+  359 Pixel, beide Knöpfe sind wieder da.
+- **Statistikseite ließ sich seitlich schieben,** sobald ein Benutzername keine
+  Trennmöglichkeit hatte: 450 Pixel Breite bei 375 Pixel Bildschirm. Dem Namen
+  fehlte die Eigenschaft, unter seine Inhaltsbreite zu schrumpfen, die auf der
+  Profilseite korrekt gesetzt war.
+
+### Eine Mobil-Regel bewirkte das Gegenteil
+
+- Die zentrale Regel für Dialoge auf schmalen Schirmen griff auf **jede** Karte im
+  Dialog statt nur auf die äußere. Die Versionskacheln im Raster wurden dadurch auf
+  92 Prozent der Bildschirmbreite aufgeblasen und sprengten das Raster. Jetzt trifft
+  sie gezielt die Dialogkarte, dazu weniger Rand und Scrollen bei langen Inhalten.
+
+### Lange Texte werden gekürzt statt umgebrochen
+
+Durchgängig umgesetzt für Versionsnamen, Benutzernamen in Rangliste, Nutzer-
+verwaltung, Slot-Liste, Spielerliste und Spielerspalte sowie Kontonamen beim
+Freigeben. Der vollständige Text steht jeweils als Kurzinfo bereit.
+
+- Versionskacheln sind dadurch einheitlich hoch; vorher schwankten sie je nach
+  Namenslänge zwischen 150 und 213 Pixeln, wodurch die Aktionsknöpfe innerhalb
+  einer Rasterreihe um bis zu 31 Pixel versetzt standen.
+- Ranglistenzeilen sind einheitlich 58 statt wechselnd 58 und 86 Pixel hoch, und der
+  Name bekommt 163 statt 53 Pixel Platz.
+- In der Einwandphase rutschte der Knopf bei langen Namen in eine eigene Zeile,
+  mitten in einer Entscheidung mit Zeitbegrenzung.
+- Beim Spielernamen in der Zeitleiste waren alle Kürzungs-Eigenschaften gesetzt, die
+  Kürzung griff aber nie: Eine Kette von Containern wuchs mit dem Inhalt mit, sodass
+  der Text rechnerisch „passte" und erst weiter außen hart abgeschnitten wurde.
+
+### Weitere Verbesserungen auf schmalen Bildschirmen
+
+- Das Konto-Symbol oben rechts überlappte den Aktualisieren-Knopf von Rangliste und
+  Statistik sowie die Knöpfe im Bingo-Kopf. Alle betroffenen Kopfzeilen halten jetzt
+  Abstand.
+- Knöpfe mit Symbol und Beschriftung zeigen auf schmalen Schirmen nur noch das
+  Symbol, mit hinterlegter Beschriftung für die Bedienbarkeit.
+- Sieg-Dialog und Spielstand-Dialoge stapeln ihre Knöpfe, statt sie umbrechen zu
+  lassen; die Bingo-Antwortknöpfe passen wieder nebeneinander.
+- Im Versions-Wechsel-Dialog lagen zwei Scrollbereiche ineinander, was auf einem
+  Touchgerät hakelig war. Jetzt scrollt nur die Dialogkarte.
+
+### Songs öffnen in der Spotify-App statt in einem Tab
+
+Auf dem Handy öffneten Songs bisher einen Browser-Tab statt der App. Der Grund: Ein
+per Skript geöffnetes Fenster löst die App-Verknüpfung von Android und iOS nicht
+aus, das tut nur ein Protokoll-Link. Die Weboberfläche versucht jetzt zuerst die
+App und fällt auf den Web-Player zurück, wenn nichts übernimmt. Unter Android
+übernimmt eine Intent-Adresse den Rückfall selbst, unter iOS läuft der Aufruf über
+ein verstecktes Rahmenfenster, weil ein direkter Wechsel dort eine Fehlerseite
+erzeugen kann. Die Desktop-App bleibt unverändert.
+
 ## 2026-08-20 – Version 1.0.1: Titel und Künstler richtig erkennen
 
 Betrifft das Raten von Titel und Künstler (Bingo-Kategorien „Titel des Songs" und

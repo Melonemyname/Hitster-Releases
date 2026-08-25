@@ -906,10 +906,55 @@
     grid-template-columns: auto 1fr auto;
     gap: 4px;
     flex-shrink: 0;
+    /* Die Kopfzeile hat `margin: 0 auto`; damit greift im Spalten-Flex von
+       `.game-page` kein `stretch` mehr und sie bemisst sich an ihrem
+       max-content. Gemessen waren das 471px bei 375px Viewport. Weil
+       `.game-page` auf `overflow: hidden` steht, gab es keinen Scrollbalken:
+       Info-Knopf und Zahnrad wurden rechts einfach abgeschnitten und waren
+       unbedienbar. Deshalb hart auf die Seitenbreite deckeln. */
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
   }
 
+  /* Die drei Spalten duerfen schrumpfen, statt den Kopf aufzublaehen. */
+  .game-info-left,
+  .game-info-center,
+  .game-info-right {
+    min-width: 0;
+  }
+  .game-info-center {
+    flex-wrap: wrap;
+  }
+
+  /* Reserve fuer das globale Konto-FAB (fest bei x 338–363), analog zur
+     zentralen `.head-fab-space` in app.scss. */
+  .game-info-right {
+    padding-right: 44px;
+  }
+
+  /* Der Name des einwendenden Spielers steht auf `nowrap` (siehe
+     `.objection-timer__text`) und trieb die Kopfzeile sonst waehrend der
+     Einwandphase erneut auseinander. */
+  .objection-timer__text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 38vw;
+  }
+
+  /* Bingo-Kopf: Info-Knopf und Zahnrad sitzen ganz rechts und lagen damit
+     unter dem globalen Konto-FAB (fest oben rechts, z-index 4000). Gleiche
+     Reserve wie bei `.game-info-right` in den anderen Modi. */
+  .bingo-header {
+    padding-right: 44px;
+  }
+
+  /* `size="lg"` setzt die Schriftgroesse als INLINE-Style (20px, siehe
+     Quasars use-size). Ohne `!important` war diese Regel deshalb wirkungslos
+     und die Chips blieben gross – allein sie machten rund 260px der 471px
+     breiten Kopfzeile aus. */
   .game-info-center .q-chip {
-    font-size: 0.75rem;
+    font-size: 0.75rem !important;
   }
 
   /* --- Timelines: volle restliche Höhe, Spieler nebeneinander --- */
@@ -940,24 +985,60 @@
 
   /* --- Timeline Header: single column, zentriert --- */
   .timeline-header {
-    grid-template-columns: 1fr;
+    /* `1fr` ist die Kurzform von `minmax(auto, 1fr)`. Das `auto`-Minimum
+       verbietet dem Track, unter die min-content-Breite seines Inhalts zu
+       gehen; `.player-info` wuchs dadurch auf 244px in einer 152px breiten
+       Kopfzeile und der Name wurde erst weiter aussen hart abgeschnitten.
+       `minmax(0, 1fr)` nimmt dieses Minimum weg. */
+    grid-template-columns: minmax(0, 1fr);
     text-align: center;
     gap: 2px;
     margin-bottom: 6px;
     padding-bottom: 4px;
     flex-shrink: 0;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
   }
 
   .player-info {
     flex-direction: column;
     align-items: center;
     gap: 2px;
-    justify-self: center;
+    /* `justify-self: center` liesse das Element auf fit-content wachsen.
+       `stretch` + `width: 100%` binden es an die Track-Breite. */
+    justify-self: stretch;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
   }
 
+  /* Volle Breite statt fit-content, damit der Name darin schrumpfen kann;
+     Avatar und Name bleiben durch `justify-content` mittig. */
+  .player-name-row {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    justify-content: center;
+  }
+
+  /* Der Avatar behaelt seine Groesse, gekuerzt wird nur der Name. */
+  .player-name-row .avatar-stack {
+    flex: 0 0 auto;
+  }
+
+  /* Kuerzen statt umbrechen: „Wolfgang Amadeus Testspieler" ergab auf 114px
+     Spaltenbreite drei Zeilen (52px hoch). Dadurch waren die Kopfzeilen der
+     beiden nebeneinander sichtbaren Spalten unterschiedlich hoch und die
+     Kartenbereiche darunter starteten versetzt. Voller Name im `title`. */
   .player-info .text-h6 {
     font-size: 0.9rem;
-    word-break: break-word;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     text-align: center;
     line-height: 1.2;
   }
@@ -1086,6 +1167,27 @@
     width: 90vw;
     padding: 24px 16px 20px 16px;
   }
+
+  /* Auf Mobil stehen die Timeline-Karten senkrecht (`.timeline-cards-inner`
+     wird zur Spalte, `overflow-x: hidden`). Ein waagerechter Scroller gibt es
+     hier nicht, die Pfeile haetten also nichts zu tun und wuerden mit ihrem
+     `left/right: -6px` in die Nachbarspalte ragen. */
+  .timeline-cards-nav {
+    display: none;
+  }
+
+  /* Sieg-Dialog: zwei `size="lg"`-Knoepfe mit Icon und Text sind zusammen
+     rund 350px breit und brachen um. Untereinander wie beim Neustart- und
+     Speichern-Dialog (siehe `.restart-actions` / `.save-dialog-actions`). */
+  .victory-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .victory-actions .q-btn {
+    width: 100%;
+    margin: 0 !important;
+  }
 }
 
 /* ── Einwand: Header-Countdown + Number-Picker (Etappe 1) ────────────── */
@@ -1098,6 +1200,14 @@
   font-weight: 600;
   font-size: 0.85rem;
   white-space: nowrap;
+}
+
+/* Einwand-Opt-in: Chip und Knopf behalten ihre Breite, gekuerzt wird der
+   Spielername (siehe `ellipsis` im Template). Sonst rutschte der Knopf bei
+   langen Namen aus der Zeile. */
+.objection-optin__chip,
+.objection-optin__btn {
+  flex: 0 0 auto;
 }
 
 .raffle-list {
