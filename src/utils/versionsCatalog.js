@@ -48,10 +48,39 @@ export const VERSION_ICONS = {
 };
 
 // Löst ein gespeichertes Cover ({kind,ref}) in eine anzeigbare URL auf.
+// Dieselben Regeln prüft der Server. Cover kommen auch aus geteilten Versionen
+// anderer Spieler; was nicht passt, erscheint als „custom".
+const COVER_PRESET_REF = /^[a-z0-9_-]{1,40}$/;
+const COVER_UPLOAD_REF = /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/;
+const COVER_UPLOAD_MAX = 400000;
+
 export function resolveCover(cover) {
-  if (!cover) return VERSION_ICONS.custom;
-  if (cover.kind === "upload") return cover.ref; // Data-URL
-  return VERSION_ICONS[cover.ref] || VERSION_ICONS.custom;
+  if (!cover || typeof cover.ref !== "string") return VERSION_ICONS.custom;
+  if (cover.kind === "upload") {
+    // Nur echte Bild-Data-URLs, keine beliebigen Adressen.
+    return cover.ref.length <= COVER_UPLOAD_MAX && COVER_UPLOAD_REF.test(cover.ref)
+      ? cover.ref
+      : VERSION_ICONS.custom;
+  }
+  // Nur eigene Schlüssel, sonst lieferte etwa "constructor" etwas aus dem Prototyp.
+  if (
+    cover.kind === "preset" &&
+    COVER_PRESET_REF.test(cover.ref) &&
+    Object.hasOwn(VERSION_ICONS, cover.ref)
+  ) {
+    return VERSION_ICONS[cover.ref];
+  }
+  return VERSION_ICONS.custom;
+}
+
+// Bild einer Version aus den Raum-Metadaten des Hosts. Neuere Clients
+// schicken das Cover-Objekt mit, das hier lokal aufgelöst wird; ältere nur die
+// aufgelöste Adresse (`icon`), die der Server auf Data-URLs und relative Pfade
+// beschränkt.
+export function metaIcon(meta) {
+  if (!meta) return null;
+  if (meta.cover) return resolveCover(meta.cover);
+  return meta.icon || null;
 }
 
 // Hinweis: Die früher hier definierte `STANDARD_VERSIONS`-Liste kommt jetzt aus

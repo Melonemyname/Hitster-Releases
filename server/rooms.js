@@ -1,6 +1,13 @@
 // In-Memory Raumverwaltung
 const songClassifications = require('./songClassifications')
 const { getAvatarMap } = require('./auth')
+const {
+  isValidSongUrl,
+  isPoolId,
+  sanitizePoolList,
+  sanitizeVersionMeta,
+  text
+} = require('./validate')
 
 // Sammelt alle Mitglieder-Usernamen eines Raums und liefert deren Avatar-Pfade
 // als Map (für die Anzeige der Profilbilder in Lobby/Spiel).
@@ -39,6 +46,16 @@ const BINGO_TIMER_SECONDS_DEFAULT = 30
 const BINGOS_TO_WIN_MIN = 1
 const BINGOS_TO_WIN_MAX = 12
 const BINGOS_TO_WIN_DEFAULT = 3
+const BINGO_TIMER_SECONDS_MIN = 5
+const BINGO_TIMER_SECONDS_MAX = 3600
+
+// Grenzen für das, was Host und Spieler in einen Raum schreiben dürfen. Ein
+// Raum liegt im Speicher und geht mit jedem roomState an alle Mitglieder,
+// deshalb ist nichts davon unbegrenzt.
+const MAX_SONG_POOLS = 50
+const MAX_VERSIONS_META = 60
+const SLOT_NAME_MAX = 40
+const SAVED_PLAYERS_MAX = 30
 
 // Karten-Generierung: identisch zu `src/composables/useBingo.js`
 // (`generateBingoCard`). Beide Seiten müssen synchron gehalten werden;
@@ -431,10 +448,29 @@ function startBingoRound (room, { songLink, songData }) {
     phase: 'reveal',
     roundNumber: prevRoundNumber + 1,
     category,
-    songLink: songLink || null,
-    songData: songData || null // intern, wird beim Auflösen freigegeben
+    // Nur gültige Song-Links, der Link geht mit dem roomState an alle.
+    songLink: isValidSongUrl(songLink) ? songLink : null,
+    songData: sanitizeBingoSongData(songData) // intern, wird beim Auflösen freigegeben
   }
   return { ok: true, category }
+}
+
+// Songdaten einer Bingo-Runde auf die Felder begrenzen, die die Auswertung
+// braucht. Sie gehen nach der Auflösung an alle.
+function sanitizeBingoSongData (songData) {
+  if (!songData || typeof songData !== 'object') return null
+  const years = Array.isArray(songData.years)
+    ? songData.years.slice(0, 10).map((y) => text(y, 20)).filter(Boolean)
+    : []
+  return {
+    title: text(songData.title, 300),
+    artist: text(songData.artist, 300),
+    year: typeof songData.year === 'number' && Number.isFinite(songData.year)
+      ? songData.year
+      : text(songData.year, 40),
+    years,
+    ensemble: text(songData.ensemble, 20)
+  }
 }
 
 /**
@@ -906,7 +942,7 @@ function normalizeBingoSettings (settings = {}) {
     : 'timer'
   const rawTimerSeconds = Number(settings.bingoTimerSeconds)
   const timerSeconds = Number.isFinite(rawTimerSeconds) && rawTimerSeconds > 0
-    ? Math.floor(rawTimerSeconds)
+    ? Math.max(BINGO_TIMER_SECONDS_MIN, Math.min(BINGO_TIMER_SECONDS_MAX, Math.floor(rawTimerSeconds)))
     : BINGO_TIMER_SECONDS_DEFAULT
   const rawToWin = Number(settings.bingosToWin)
   const bingosToWin = Number.isFinite(rawToWin)
@@ -915,20 +951,79 @@ function normalizeBingoSettings (settings = {}) {
   return { bingoDifficulty: difficulty, bingoTimerMode: timerMode, bingoTimerSeconds: timerSeconds, bingosToWin }
 }
 
-function createRoom (hostUsername, settings = {}) {
+// Versions-Metadaten des Raums neu zusammenstellen: Behalten werden nur
+// Einträge für Versionen, die gerade gewählt sind (Raum-Pools oder Battle-Pool
+// eines Slots), dazu kommen die neu gemeldeten für `neueKeys`. So wächst die
+// Liste nicht mit jeder Auswahl weiter.
+function mergeVersionsMeta (room, incoming, neueKeys = []) {
+  const alt = room?.settings?.customVersionsMeta || {}
+  const aktiv = new Set([
+    ...(Array.isArray(room?.settings?.songPools) ? room.settings.songPools : []),
+    ...(room?.players || []).map((p) => p.pool).filter(Boolean)
+  ])
+  const out = {}
+  const hat = (obj, key) => !!obj && typeof obj === 'object' && Object.prototype.hasOwnProperty.call(obj, key)
+  for (const key of aktiv) {
+    if (Object.keys(out).length >= MAX_VERSIONS_META) break
+    if (isPoolId(key) && hat(alt, key)) out[key] = alt[key]
+  }
+  for (const key of neueKeys) {
+    if (!isPoolId(key) || !hat(incoming, key)) continue
+    if (!hat(out, key) && Object.keys(out).length >= MAX_VERSIONS_META) break
+    const meta = sanitizeVersionMeta(key, incoming[key])
+    if (meta) out[key] = meta
+  }
+  return out
+}
+
+// Raum-Einstellungen beim Anlegen: nur bekannte Schlüssel mit geprüften
+// Werten. Früher wurde alles vom Client übernommen und mit jedem roomState
+// wieder verteilt.
+function sanitizeRoomSettings (settings) {
+  const s = settings && typeof settings === 'object' ? settings : {}
+  const gameMode = normalizeGameMode(s.gameMode)
+  const songPools = sanitizePoolList(s.songPools, MAX_SONG_POOLS)
+  const out = {
+    gameMode,
+    songPools,
+    customVersionsMeta: mergeVersionsMeta(
+      { settings: { songPools }, players: [] },
+      s.customVersionsMeta,
+      songPools
+    )
+  }
+  if (['host-only', 'all-clients'].includes(s.audioMode)) out.audioMode = s.audioMode
+  // Spielernamen aus einem geladenen Spielstand (Vorschläge beim Beitritt).
+  if (Array.isArray(s.savedPlayers)) {
+    out.savedPlayers = s.savedPlayers
+      .filter((n) => typeof n === 'string' && n.trim())
+      .slice(0, SAVED_PLAYERS_MAX)
+      .map((n) => n.trim().slice(0, SLOT_NAME_MAX))
+  }
+  if (gameMode === 'bingo') Object.assign(out, normalizeBingoSettings(s))
+  return out
+}
+
+// Anzeigename eines Slots: Text, gekürzt, sonst der Standardname.
+function normalizeSlotName (slotName, fallback) {
+  const name = typeof slotName === 'string' ? slotName.trim().slice(0, SLOT_NAME_MAX) : ''
+  return name || fallback
+}
+
+function createRoom (hostUsername, settings = {}, hostUserId = null) {
   if (!hostUsername || typeof hostUsername !== 'string') {
     throw new Error('Ungültiger Host-Username')
   }
   const code = generateCode()
-  const gameMode = normalizeGameMode(settings.gameMode)
-  const mergedSettings = { ...settings, gameMode }
-  if (gameMode === 'bingo') {
-    Object.assign(mergedSettings, normalizeBingoSettings(settings))
-  }
+  const mergedSettings = sanitizeRoomSettings(settings)
   const room = {
     code,
     hostUsername,
-    audioMode: ['host-only', 'all-clients'].includes(settings.audioMode) ? settings.audioMode : 'host-only',
+    // Stabile id des Hosts und des Erstellers (siehe index.js: Aufräumen
+    // alter Räume, Namensgleichheit nach Umbenennung).
+    hostUserId,
+    createdByUserId: hostUserId,
+    audioMode: mergedSettings.audioMode || 'host-only',
     settings: mergedSettings,
     players: [],
     gameState: null,
@@ -947,6 +1042,11 @@ function deleteRoom (code) {
   rooms.delete(code)
 }
 
+// Alle Räume (für das Aufräumen in index.js).
+function getAllRooms () {
+  return [...rooms.values()]
+}
+
 /**
  * Spieler einem Slot hinzufügen.
  * slotId === null → neuen Slot anlegen
@@ -962,7 +1062,7 @@ function addPlayerToSlot (code, username, slotId, slotName) {
       : 1
     room.players.push({
       slotId: nextId,
-      slotName: slotName || `Spieler ${nextId}`,
+      slotName: normalizeSlotName(slotName, `Spieler ${nextId}`),
       members: [username],
       score: 0,
       objections: 3,
@@ -994,7 +1094,7 @@ function setSlotPool (code, username, pool) {
     return { ok: false, reason: 'Diese Version gibt es nicht.' }
   }
   const normalizedPool = pool.trim()
-  if (normalizedPool.length > 100) {
+  if (!isPoolId(normalizedPool)) {
     return { ok: false, reason: 'Diese Version gibt es nicht.' }
   }
   const isBattle = room.settings?.gameMode === 'battle'
@@ -1110,6 +1210,13 @@ function getRoomBroadcastState (code) {
   // Rückkehr-Verwaltung (wer gegangen ist, wer zurück darf) ist intern.
   delete clone.leftMembers
   delete clone.rejoinGrants
+  // Ebenso die Verwaltung für Statistik und Aufräumen.
+  delete clone.memberUserIds
+  delete clone.createdByUserId
+  delete clone.emptySince
+  delete clone.gameStartedAt
+  delete clone.lastResultAt
+  delete clone.cardsDrawn
   // Profilbilder der Mitglieder mitgeben (username -> avatar|null).
   clone.memberAvatars = collectMemberAvatars(room)
   if (bingoSolutionHidden(room)) {
@@ -1162,6 +1269,8 @@ module.exports = {
   createRoom,
   getRoom,
   deleteRoom,
+  getAllRooms,
+  mergeVersionsMeta,
   addPlayerToSlot,
   removePlayerFromRoom,
   setSlotPool,
@@ -1194,6 +1303,7 @@ module.exports = {
   getLockedMarkIndices,
   normalizeGameMode,
   normalizeBingoSettings,
+  MAX_SONG_POOLS,
   BINGO_CATEGORIES,
   BINGO_CELL_COUNT,
 }

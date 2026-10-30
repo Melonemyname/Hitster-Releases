@@ -2,8 +2,8 @@
 
 Diese Anleitung richtet einen **eigenen Hitster-Server** ein, den andere per
 Internet-Adresse erreichen und dem sie beitreten koennen. Sie ist bewusst
-allgemein gehalten (Linux-Server mit Node + Caddy); die persoenliche Surface-
-Variante mit Samba/Syncthing steht in [`README.md`](README.md).
+allgemein gehalten (Linux-Server mit Node + Caddy). Eine Kurzfassung samt
+Dateiuebersicht steht in [`README.md`](README.md).
 
 **Ergebnis:**
 - **Website (Handy/Browser):** `https://<deine-domain>` – der Server liefert das

@@ -1226,6 +1226,7 @@ import { getUsername } from "../utils/authService";
 import { storeSlotAvatars } from "../utils/profileService";
 import AvatarStack from "../components/AvatarStack.vue";
 import { useVersions } from "../composables/useVersions";
+import { metaIcon } from "../utils/versionsCatalog";
 import { encodeNamesQuery } from "../composables/useGameState";
 import { parseSnapshotText } from "../utils/savedGames";
 import { useRejoinRequests } from "../composables/useRejoinRequests";
@@ -2154,6 +2155,10 @@ export default {
           meta[value] = {
             value: v.value,
             label: v.label,
+            // Mitspieler lösen das Cover selbst auf (resolveCover). `icon`
+            // bleibt für ältere Clients, der Server lässt davon nur
+            // Data-URLs und relative Pfade durch.
+            cover: v.cover || null,
             icon: v.icon || null,
             trackCount: v.trackCount || 0,
           };
@@ -2167,7 +2172,12 @@ export default {
       if (v) return v;
       const m = sharedVersionMeta.value[value];
       if (m) {
-        return { value, label: m.label, icon: m.icon, trackCount: m.trackCount };
+        return {
+          value,
+          label: m.label,
+          icon: metaIcon(m),
+          trackCount: m.trackCount,
+        };
       }
       // Weder im eigenen Katalog noch vom Host mitgeschickt: die Version wurde
       // geloescht oder nie geteilt. Den rohen Wert anzuzeigen ("custom-1234…")

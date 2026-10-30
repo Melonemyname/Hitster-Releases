@@ -4,6 +4,7 @@ const crypto = require('crypto')
 const fs = require('fs')
 const customVersions = require('./customVersions')
 const { dataPath } = require('./dataDir')
+const { isSafeKey, isPoolId } = require('./validate')
 
 const USERS_FILE = dataPath('users.json')
 const JWT_SECRET_FILE = dataPath('.jwt-secret')
@@ -212,12 +213,26 @@ function resolveTokenUser (payload) {
   return user
 }
 
+// Hash zum Vergleichen, wenn es den Account nicht gibt. Der Vergleich kostet
+// dann genauso lange wie bei einem echten Account, an der Antwortzeit lässt
+// sich also nicht ablesen, ob ein Name vergeben ist. Erst beim ersten Bedarf
+// erzeugt, damit der Serverstart nicht wartet.
+let _dummyHash = null
+async function dummyCompare (value) {
+  if (!_dummyHash) _dummyHash = await bcrypt.hash(crypto.randomBytes(16).toString('hex'), 10)
+  await bcrypt.compare(String(value ?? ''), _dummyHash)
+  return false
+}
+
 async function login (username, password) {
   if (!username || !password) return null
   const users = loadUsers()
   const user = users.find(u => u.username === username)
-  if (!user || !user.passwordHash) return null
-  const match = await bcrypt.compare(password, user.passwordHash)
+  if (!user || !user.passwordHash) {
+    await dummyCompare(password)
+    return null
+  }
+  const match = await bcrypt.compare(String(password), user.passwordHash)
   if (!match) return null
   return { token: issueToken(user), id: user.id, username: user.username }
 }
@@ -324,16 +339,37 @@ function emptyStats () {
 // Bestehende Stats mit Defaults auffüllen (tolerant für Alt-Accounts ohne stats).
 function normalizeStats (raw) {
   const s = { ...emptyStats(), ...(raw || {}) }
-  s.byMode = { ...(raw?.byMode || {}) }
-  s.byVersion = { ...(raw?.byVersion || {}) }
+  // Unsichere Schlüssel aus Altbeständen fallen dabei weg (siehe bumpBucket).
+  const toepfe = (obj) => Object.fromEntries(
+    Object.entries(obj && typeof obj === 'object' ? obj : {}).filter(([k]) => isSafeKey(k))
+  )
+  s.byMode = toepfe(raw?.byMode)
+  s.byVersion = toepfe(raw?.byVersion)
   return s
 }
 
-function bumpBucket (container, key, field, amount) {
-  if (!key) return
-  if (!container[key]) container[key] = { points: 0, wins: 0, games: 0 }
-  container[key][field] += amount
+// Höchstzahl der Versionen in der Statistik eines Nutzers. Neue Versionen über
+// der Grenze werden nicht mehr aufgenommen, bestehende zählen weiter.
+const MAX_STAT_VERSIONS = 300
+
+// Zähler in einem Statistik-Topf erhöhen. Schlüssel wie `__proto__` würden
+// sonst auf den Objekt-Prototyp schreiben und damit jedes Objekt im Server
+// verändern, deshalb nur eigene Eigenschaften und nur sichere Schlüssel.
+function bumpBucket (container, key, field, amount, maxKeys = Infinity) {
+  if (!key || !isSafeKey(key)) return
+  if (!Object.prototype.hasOwnProperty.call(container, key)) {
+    if (Object.keys(container).length >= maxKeys) return
+    container[key] = { points: 0, wins: 0, games: 0 }
+  }
+  const bucket = container[key]
+  if (!bucket || typeof bucket !== 'object') return
+  bucket[field] = (Number(bucket[field]) || 0) + amount
 }
+
+// Obergrenzen pro verbuchtem Spiel (siehe host:recordGameResult in index.js,
+// dort steht die Herleitung der Punktegrenze).
+const MAX_POINTS_PER_GAME = 500
+const MAX_VERSIONS_PER_GAME = 50
 
 /**
  * Verbucht ein abgeschlossenes Online-Spiel für mehrere Nutzer in EINEM
@@ -351,13 +387,15 @@ function recordGameResults (entries = []) {
     const user = users.find((u) => u.username === e.username)
     if (!user) continue
     const s = normalizeStats(user.stats)
-    const pts = Number(e.points) || 0
+    // Letzte Absicherung, auch wenn der Aufrufer schon prüft: ganze Zahl,
+    // nicht negativ, gedeckelt. Versionen nur mit gültiger Kennung.
+    const pts = Math.max(0, Math.min(MAX_POINTS_PER_GAME, Math.floor(Number(e.points) || 0)))
     const isTeam = !!e.isTeam
     const isWinner = !!e.isWinner
-    const mode = e.mode || 'normal'
-    const versions = Array.isArray(e.versions)
-      ? [...new Set(e.versions.filter(Boolean))]
-      : (e.version ? [e.version] : [])
+    const mode = isPoolId(e.mode) ? e.mode : 'normal'
+    const versions = (Array.isArray(e.versions)
+      ? [...new Set(e.versions.filter(isPoolId))]
+      : (isPoolId(e.version) ? [e.version] : [])).slice(0, MAX_VERSIONS_PER_GAME)
     s.totalPoints += pts
     s.gamesPlayed += 1
     if (isTeam) s.pointsTeam += pts
@@ -372,9 +410,9 @@ function recordGameResults (entries = []) {
     if (isWinner) bumpBucket(s.byMode, mode, 'wins', 1)
     // byVersion: jede gespielte Version zählt (Normal/Film-Mischpool → alle).
     for (const version of versions) {
-      bumpBucket(s.byVersion, version, 'points', pts)
-      bumpBucket(s.byVersion, version, 'games', 1)
-      if (isWinner) bumpBucket(s.byVersion, version, 'wins', 1)
+      bumpBucket(s.byVersion, version, 'points', pts, MAX_STAT_VERSIONS)
+      bumpBucket(s.byVersion, version, 'games', 1, MAX_STAT_VERSIONS)
+      if (isWinner) bumpBucket(s.byVersion, version, 'wins', 1, MAX_STAT_VERSIONS)
     }
     user.stats = s
     changed = true
@@ -704,24 +742,93 @@ async function setSecurity (username, question, answer) {
   return { ok: true, profile: publicProfile(user) }
 }
 
-// Liefert die hinterlegte Sicherheitsfrage (für den Recovery-Flow).
+// ── Fehlversuche bei der Wiederherstellung ─────────────────────────────
+// Das Ratenlimit pro IP (authLimiter in index.js) bremst einen einzelnen
+// Angreifer, nicht aber viele Adressen, die dieselbe Antwort raten. Deshalb
+// zählt der Server Fehlversuche zusätzlich pro Benutzername: Nach 5 falschen
+// Antworten ist die Wiederherstellung für 15 Minuten gesperrt, jede weitere
+// Sperre dauert doppelt so lange (höchstens 24 Stunden). Gezählt wird auch für
+// Namen, die es nicht gibt, damit die Antworten für alle gleich aussehen. Der
+// Zähler liegt nur im Speicher und beginnt nach einem Neustart von vorn.
+const RECOVERY_MAX_FAILS = 5
+const RECOVERY_LOCK_MS = 15 * 60 * 1000
+const RECOVERY_LOCK_MAX_MS = 24 * 60 * 60 * 1000
+// Ohne neuen Fehlversuch verfällt ein Eintrag nach einem Tag.
+const RECOVERY_FORGET_MS = 24 * 60 * 60 * 1000
+const RECOVERY_MAX_ENTRIES = 10000
+const recoveryAttempts = new Map()
+
+function recoveryEntry (username, now) {
+  const key = usernameKey(username)
+  let e = recoveryAttempts.get(key)
+  if (e && !e.lockedUntil && now - e.lastFail > RECOVERY_FORGET_MS) {
+    recoveryAttempts.delete(key)
+    e = null
+  }
+  return { key, entry: e }
+}
+
+// Sekunden bis zum Ende der Sperre, 0 wenn nicht gesperrt.
+function recoveryLockedFor (username, now = Date.now()) {
+  const { entry } = recoveryEntry(username, now)
+  if (!entry || !entry.lockedUntil) return 0
+  if (entry.lockedUntil <= now) {
+    entry.lockedUntil = 0
+    return 0
+  }
+  return Math.ceil((entry.lockedUntil - now) / 1000)
+}
+
+function recordRecoveryFailure (username, now = Date.now()) {
+  const { key, entry } = recoveryEntry(username, now)
+  // Speicher begrenzen: im Notfall die ältesten Einträge verwerfen.
+  if (!entry && recoveryAttempts.size >= RECOVERY_MAX_ENTRIES) {
+    const aeltester = recoveryAttempts.keys().next().value
+    recoveryAttempts.delete(aeltester)
+  }
+  const e = entry || { fails: 0, level: 0, lockedUntil: 0, lastFail: 0 }
+  e.fails += 1
+  e.lastFail = now
+  if (e.fails >= RECOVERY_MAX_FAILS) {
+    e.level += 1
+    e.fails = 0
+    e.lockedUntil = now + Math.min(RECOVERY_LOCK_MAX_MS, RECOVERY_LOCK_MS * 2 ** (e.level - 1))
+  }
+  recoveryAttempts.set(key, e)
+}
+
+// Liefert die hinterlegte Sicherheitsfrage (für den Recovery-Flow). Ob es den
+// Account nicht gibt oder ob er keine Frage hat, ist nach außen derselbe
+// Fehler.
 function getSecurityQuestion (username) {
   const user = loadUsers().find(u => u.username === username)
-  if (!user) return { ok: false, error: 'user_not_found' }
-  if (!user.security || !user.security.question) return { ok: false, error: 'no_security_question' }
+  if (!user || !user.security || !user.security.question) {
+    return { ok: false, error: 'recovery_unavailable' }
+  }
   return { ok: true, question: user.security.question }
 }
 
-// Setzt das Passwort neu, wenn die Sicherheitsantwort stimmt.
+// Setzt das Passwort neu, wenn die Sicherheitsantwort stimmt. Unbekannter
+// Name, fehlende Frage und falsche Antwort liefern denselben Fehler und
+// kosten gleich viel Zeit. Während einer Sperre wird gar nicht erst geprüft.
 async function resetPasswordWithAnswer (username, answer, newPassword) {
   const pErr = validatePassword(newPassword)
   if (pErr) return { ok: false, error: pErr }
-  const existing = loadUsers().find(u => u.username === username)
+  const name = typeof username === 'string' ? username : ''
+  const gesperrt = recoveryLockedFor(name)
+  if (gesperrt) return { ok: false, error: 'recovery_locked', retryAfterSec: gesperrt }
+  const existing = loadUsers().find(u => u.username === name)
   if (!existing || !existing.security || !existing.security.answerHash) {
-    return { ok: false, error: 'no_security_question' }
+    await dummyCompare(answer)
+    recordRecoveryFailure(name)
+    return { ok: false, error: 'answer_wrong' }
   }
   const match = await bcrypt.compare(normalizeAnswer(answer || ''), existing.security.answerHash)
-  if (!match) return { ok: false, error: 'answer_wrong' }
+  if (!match) {
+    recordRecoveryFailure(name)
+    return { ok: false, error: 'answer_wrong' }
+  }
+  recoveryAttempts.delete(usernameKey(name))
   const newHash = await bcrypt.hash(newPassword, 10)
   // Schreib-Abschnitt ohne await dazwischen (Lost-Update-Schutz).
   const users = loadUsers()
@@ -766,5 +873,7 @@ module.exports = {
   adminCreateUser,
   adminDeleteUser,
   adminSetUserHidden,
+  MAX_POINTS_PER_GAME,
+  MAX_VERSIONS_PER_GAME,
   JWT_SECRET
 }

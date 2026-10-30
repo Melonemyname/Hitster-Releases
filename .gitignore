@@ -14,13 +14,15 @@ dist-ssr
 coverage
 *.local
 
-# Hochgeladene Profilbilder: **bewusst mit im Repo**, analog zu server/users.json.
-# Solange der Server abwechselnd auf Mac/Linux/Windows läuft, ist das der
-# einfachste Weg, die zugehörigen Bild-Dateien synchron zu halten (users.json
-# referenziert /uploads/avatars/…jpeg). Sobald der Server dauerhaft an einem
-# Ort läuft, kommt der Ordner (analog zu users.json) wieder aus dem Repo raus –
-# siehe BACKLOG „Server / Hosting".
-# server/uploads
+# Laufzeitdaten des Servers: Konten mit Passwort-Hashes, Profilbilder und
+# Klassifikationen. Liegen im Betrieb im DATA_DIR, lokal neben dem Server-Code,
+# und gehören nie ins Repo.
+server/users.json
+server/server-owner.json
+server/uploads/
+server/song-classifications.json
+server/user-versions.json
+server/restricted-versions.json
 
 # Auto-generiertes JWT-Signier-Secret für lokale Entwicklung (persistiert,
 # damit Tokens Neustarts überleben). In Produktion wird stattdessen die

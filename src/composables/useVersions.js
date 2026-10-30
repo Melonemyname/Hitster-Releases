@@ -402,6 +402,10 @@ export function useVersions() {
       value: v.value,
       label: v.label,
       icon: resolveCover(v.cover),
+      // Das Cover-Objekt selbst geht mit in den Raum (siehe Lobby
+      // buildVersionsMeta): Die aufgelöste Adresse ist in der Desktop-App
+      // eine file://-Adresse, die auf anderen Geräten nicht lädt.
+      cover: v.cover || null,
       custom: true,
       synced: !!v.synced,
       imported: true,
@@ -421,6 +425,7 @@ export function useVersions() {
       value: v.value,
       label: v.label,
       icon: resolveCover(v.cover),
+      cover: v.cover || null,
       custom: false,
       restricted: true,
       canManage: !!v.canManage,

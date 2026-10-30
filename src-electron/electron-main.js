@@ -224,10 +224,21 @@ function loadSongFolder () {
   if (!songFolderPath) {
     // Standard: Dokumente/Hitster-Songs, bewusst ausserhalb des Installations-
     // ordners, damit Updates/Deinstallation die Daten nie anfassen.
-    songFolderPath = path.join(app.getPath('documents'), 'Hitster-Songs')
+    songFolderPath = defaultSongFolder()
   }
   return songFolderPath
 }
+
+// Standard-Ordner, falls nichts gespeichert ist (siehe loadSongFolder).
+function defaultSongFolder () {
+  return path.join(app.getPath('documents'), 'Hitster-Songs')
+}
+
+// Zuletzt im eigenen Auswahldialog gewählter Ordner. hitster:setSongFolder
+// nimmt nur diesen Pfad an (oder den Standard), keinen frei vom Renderer
+// gelieferten. Sonst könnte Code im Renderer die App beliebige Ordner anlegen,
+// befüllen und auslesen lassen.
+let pickedSongFolder = ''
 
 function saveSongFolder () {
   try {
@@ -335,6 +346,33 @@ function sendUpdateEvent (data) {
   }
 }
 
+// Gehört die Adresse zur App selbst? Geladen wird process.env.APP_URL: im
+// Dev-Modus der Vite-Server (http://localhost:<port>), in der gepackten App
+// eine file://-Adresse auf die index.html. Bei http(s) zählt der Ursprung
+// (Protokoll, Host, Port), bei file:// genau diese eine Datei. Hash und
+// Query spielen keine Rolle, das Routing läuft über den Hash.
+function isAppUrl (url) {
+  let ziel, basis
+  try {
+    ziel = new URL(url)
+    basis = new URL(process.env.APP_URL)
+  } catch {
+    return false
+  }
+  if (basis.protocol === 'file:') {
+    if (ziel.protocol !== 'file:') return false
+    // Windows: Laufwerksbuchstabe und Ordnernamen ohne Rücksicht auf Groß-
+    // und Kleinschreibung vergleichen, Prozentkodierung (Leerzeichen) einheitlich.
+    const norm = (u) => {
+      let p = u.pathname
+      try { p = decodeURIComponent(p) } catch { /* so lassen */ }
+      return platform === 'win32' ? p.toLowerCase() : p
+    }
+    return norm(ziel) === norm(basis)
+  }
+  return ziel.origin === basis.origin
+}
+
 function createWindow () {
   /**
    * Initial window options
@@ -372,7 +410,26 @@ function createWindow () {
       shell.openExternal(url)
       return { action: 'deny' }
     }
-    return { action: 'allow' }
+    // Alles andere (javascript:, file:, data: …) bekommt kein Fenster. Die App
+    // selbst öffnet keine weiteren eigenen Fenster.
+    return { action: 'deny' }
+  })
+
+  // Das Hauptfenster darf nur innerhalb der App navigieren. Hash-Routing und
+  // location.hash lösen will-navigate gar nicht erst aus, ein Neuladen bleibt
+  // auf der App-Adresse. Externe Links gehen in den System-Browser, alles
+  // andere wird verworfen, damit eine fremde Seite nie mit der Bridge
+  // (window.hitster) im Fenster landet.
+  mainWindow.webContents.on('will-navigate', (event) => {
+    const url = event.url
+    if (isAppUrl(url)) return
+    event.preventDefault()
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url)
+  })
+  // Auch Weiterleitungen des Servers (302 o. ä.) dürfen das Fenster nicht aus
+  // der App führen. Nur das Hauptdokument, Unterrahmen gibt es in der App nicht.
+  mainWindow.webContents.on('will-redirect', (event) => {
+    if (event.isMainFrame && !isAppUrl(event.url)) event.preventDefault()
   })
 
   if (process.env.DEBUGGING) {
@@ -607,12 +664,27 @@ ipcMain.handle('hitster:pickSongFolder', async () => {
     ? await dialog.showOpenDialog(mainWindow, opts)
     : await dialog.showOpenDialog(opts)
   if (res.canceled || !res.filePaths || !res.filePaths.length) return { canceled: true }
+  pickedSongFolder = path.resolve(res.filePaths[0])
   return { path: res.filePaths[0] }
 })
 
 ipcMain.handle('hitster:setSongFolder', (_e, newPath) => {
-  const p = typeof newPath === 'string' ? newPath.trim() : ''
-  if (!p) return { ok: false, error: 'invalid_path' }
+  const raw = typeof newPath === 'string' ? newPath.trim() : ''
+  if (!raw) return { ok: false, error: 'invalid_path' }
+  // Nur der im Dialog gewählte Ordner (einmalig) oder der Standard-Ordner.
+  // Verglichen wird auch ungekürzt, falls ein Ordnername mit Leerzeichen endet.
+  const ausDialog = !!pickedSongFolder &&
+    (path.resolve(raw) === pickedSongFolder || path.resolve(newPath) === pickedSongFolder)
+  const standard = path.resolve(defaultSongFolder())
+  if (!ausDialog && path.resolve(raw) !== standard) {
+    return {
+      ok: false,
+      error: 'not_picked',
+      message: 'Bitte den Ordner über „Ordner wählen“ auswählen.'
+    }
+  }
+  const p = ausDialog ? pickedSongFolder : standard
+  pickedSongFolder = ''
   try {
     fs.mkdirSync(p, { recursive: true })
   } catch (err) {

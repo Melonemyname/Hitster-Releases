@@ -1,17 +1,14 @@
 // Zentraler Ablageort für Laufzeitdaten (users.json, uploads/, Klassifikationen,
 // synchronisierte Versionen, dev-.jwt-secret).
 //
-// Standard: alles liegt neben dem Server-Code (server/) – so verhält sich der
-// Server exakt wie bisher, und die bewusst mit ins Repo commiteten Dateien
-// (users.json, song-classifications.json, uploads/) bleiben nutzbar, wenn der
-// Server abwechselnd auf Mac/Linux/Windows läuft.
+// Standard: alles liegt neben dem Server-Code (server/). Das reicht zum
+// Ausprobieren auf dem eigenen Rechner.
 //
-// Auf einem dauerhaft laufenden Homeserver (Surface Go 2, später Raspberry Pi)
-// setzt man stattdessen `DATA_DIR` auf einen Ordner AUSSERHALB des Repos. Dann
-// schreibt der Server seine Laufzeitdaten dorthin, ein täglicher `git pull`
-// berührt nur Code und kann die Daten weder überschreiben noch Merge-Konflikte
-// auslösen. Siehe BACKLOG.md, Abschnitt "Server / Hosting", und die Anleitung im
-// Surface-Homeserver-Dokument.
+// Auf einem dauerhaft laufenden Server setzt man stattdessen `DATA_DIR` auf
+// einen Ordner AUSSERHALB des Repos. Dann schreibt der Server seine
+// Laufzeitdaten dorthin, ein täglicher `git pull` berührt nur Code und kann die
+// Daten weder überschreiben noch Merge-Konflikte auslösen. Siehe
+// deploy/OEFFENTLICH-HOSTEN.md.
 
 const path = require('path')
 const fs = require('fs')

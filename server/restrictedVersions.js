@@ -13,6 +13,7 @@ const fs = require('fs')
 const path = require('path')
 const crypto = require('crypto')
 const { dataPath } = require('./dataDir')
+const { sanitizeCover, sanitizeTrack, isPoolId, text } = require('./validate')
 
 const STORE_FILE = dataPath('restricted-versions.json')
 const SEED_FILE = path.join(__dirname, 'restricted-versions.seed.json')
@@ -114,7 +115,7 @@ function listAllForAdmin () {
     id: v.id,
     value: v.value,
     label: v.label,
-    cover: v.cover || null,
+    cover: v.cover ? sanitizeCover(v.cover) : null,
     film: !!v.film,
     creatorId: v.creatorId || null,
     trackCount: Array.isArray(v.tracks) ? v.tracks.length : 0,
@@ -136,7 +137,9 @@ function listForUser (userId, isAdmin = false) {
         id: v.id,
         value: v.value,
         label: v.label,
-        cover: v.cover || { kind: 'preset', ref: 'custom' },
+        // Auch beim Ausliefern geprüft, falls ein Altbestand ein ungültiges
+        // Cover enthält.
+        cover: sanitizeCover(v.cover),
         restricted: true,
         film: !!v.film,
         // Ersteller (stabile Nutzer-id, bei Seeds null). Der Client braucht
@@ -152,13 +155,50 @@ function listForUser (userId, isAdmin = false) {
     })
 }
 
+// ── Grenzen ────────────────────────────────────────────────────────────────
+// Geteilte Versionen kann jeder eingeloggte Nutzer anlegen. Damit ein Account
+// den Speicher nicht beliebig füllt, gelten Obergrenzen (Seeds wie Hitster 1
+// und 2 liegen mit rund 300 Songs weit darunter).
+const MAX_SHARED_PER_CREATOR = 50
+const MAX_TRACKS_PER_VERSION = 3000
+const MAX_ALLOWED_USERS = 1000
+const LABEL_MAX = 100
+const VERSION_ID = /^[A-Za-z0-9_-]{1,100}$/
+
+// Liste freigegebener Nutzer-ids: nur kurze Texte, ohne Dubletten.
+function sanitizeUserIds (ids) {
+  if (!Array.isArray(ids)) return []
+  const out = []
+  for (const id of ids) {
+    if (out.length >= MAX_ALLOWED_USERS) break
+    if (typeof id === 'string' && id && id.length <= 100 && !out.includes(id)) out.push(id)
+  }
+  return out
+}
+
+// Wie viele geteilte Versionen hat ein Nutzer angelegt?
+function countByCreator (creatorId) {
+  if (!creatorId) return 0
+  return readStore().filter(v => v.creatorId === creatorId).length
+}
+
 // Version anlegen/aktualisieren (Upsert per id). Freigaben, Ersteller und das
-// Film-Flag bleiben erhalten, wenn nicht mitgegeben.
+// Film-Flag bleiben erhalten, wenn nicht mitgegeben. Label, Cover und Songs
+// werden dabei auf das zulässige Format gebracht.
 function upsert (version) {
   if (!version || !version.id) throw new Error('Version ohne id')
+  if (!VERSION_ID.test(String(version.id))) throw new Error('Ungültige Versions-Kennung')
+  if (version.tracks !== undefined && !Array.isArray(version.tracks)) {
+    throw new Error('Songliste ungültig')
+  }
+  const tracks = Array.isArray(version.tracks) ? version.tracks.map(sanitizeTrack).filter(Boolean) : null
+  if (tracks && tracks.length > MAX_TRACKS_PER_VERSION) {
+    throw new Error(`Eine Version darf höchstens ${MAX_TRACKS_PER_VERSION} Songs enthalten`)
+  }
   const list = readStore()
   const existing = list.find(v => v.id === version.id)
-  const value = version.value || existing?.value || version.id
+  const gewuenscht = isPoolId(version.value) ? version.value : null
+  const value = gewuenscht || existing?.value || version.id
   // Wie bei create(): Ein `value`, den schon eine andere Version trägt (als
   // value oder id), würde diese im Client überdecken. Geprüft wird nur, wenn
   // sich der Wert ändert, damit ein alter, schon doppelter Bestand weiter
@@ -172,16 +212,16 @@ function upsert (version) {
   const next = {
     id: version.id,
     value,
-    label: version.label || 'Version',
-    cover: version.cover || { kind: 'preset', ref: 'custom' },
+    label: text(version.label, LABEL_MAX).trim() || 'Version',
+    cover: sanitizeCover(version.cover),
     restricted: true,
     film: version.film !== undefined ? !!version.film : !!existing?.film,
     creatorId: version.creatorId !== undefined
       ? (version.creatorId || null)
       : (existing?.creatorId || null),
-    tracks: Array.isArray(version.tracks) ? version.tracks : (existing?.tracks || []),
+    tracks: tracks || (existing?.tracks || []),
     allowedUserIds: Array.isArray(version.allowedUserIds)
-      ? version.allowedUserIds
+      ? sanitizeUserIds(version.allowedUserIds)
       : (existing?.allowedUserIds || [])
   }
   const filtered = list.filter(v => v.id !== version.id)
@@ -198,6 +238,9 @@ function upsert (version) {
 // bestehende Version überdecken; ist er belegt, bekommt die neue Version die id
 // als value.
 function create (version, creatorId) {
+  if (creatorId && countByCreator(creatorId) >= MAX_SHARED_PER_CREATOR) {
+    throw new Error(`Höchstens ${MAX_SHARED_PER_CREATOR} geteilte Versionen pro Konto`)
+  }
   const id = `shared-${crypto.randomUUID()}`
   const allowed = Array.isArray(version?.allowedUserIds) ? version.allowedUserIds : []
   const withCreator = creatorId ? [...new Set([...allowed, creatorId])] : allowed
@@ -227,7 +270,10 @@ function setAllowedUsers (id, userIds) {
   const list = readStore()
   const v = list.find(x => x.id === id)
   if (!v) return { ok: false, error: 'not_found' }
-  const ids = Array.isArray(userIds) ? userIds.filter(Boolean) : []
+  // Hinweis: Freigaben brauchen keine Zustimmung des Empfängers. Wer eine
+  // Version bekommt, sieht sie einfach in seiner Liste (Cover und Songs sind
+  // beim Speichern geprüft, siehe upsert).
+  const ids = sanitizeUserIds(userIds)
   if (v.creatorId) ids.push(v.creatorId)
   v.allowedUserIds = [...new Set(ids)]
   writeStore(list)
@@ -256,5 +302,6 @@ module.exports = {
   create,
   remove,
   setAllowedUsers,
-  removeUserAccess
+  removeUserAccess,
+  countByCreator
 }

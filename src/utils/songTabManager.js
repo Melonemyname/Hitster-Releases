@@ -47,9 +47,25 @@ export function setSongOpenMode(mode) {
   }
 }
 
-// Spotify-Track-Kennung aus URL oder URI ziehen.
+// Gültige Song-Links (dieselbe Regel prüft der Server). Song-Links kommen auch
+// vom Host eines Raums (geteilte Versionen). Würden wir sie ungeprüft öffnen,
+// könnte ein Host den Gästen etwa einen `javascript:`-Link unterschieben, der
+// im Ursprung der App läuft und dort an den Login-Token im localStorage kommt.
+const SONG_URL_WEB =
+  /^https:\/\/open\.spotify\.com\/(intl-[a-z]{2}(-[a-z]{2})?\/)?track\/[A-Za-z0-9]{10,40}(\?\S*)?$/;
+const SONG_URL_URI = /^spotify:track:[A-Za-z0-9]{10,40}$/;
+const SONG_URL_MAX = 300;
+
+export function isValidSongUrl(url) {
+  if (typeof url !== "string" || url.length > SONG_URL_MAX) return false;
+  return SONG_URL_WEB.test(url) || SONG_URL_URI.test(url);
+}
+
+// Spotify-Track-Kennung aus einem gültigen Song-Link ziehen. Alles andere
+// liefert "", dann wird gar nichts geöffnet.
 function trackId(url) {
-  const m = String(url || "").match(/track[/:]([A-Za-z0-9]+)/);
+  if (!isValidSongUrl(url)) return "";
+  const m = url.match(/track[/:]([A-Za-z0-9]+)/);
   return m ? m[1] : "";
 }
 
@@ -153,23 +169,27 @@ export function canOpenSongWithoutClick() {
   return !(activation && activation.isActive === false);
 }
 
-// Rückgabe: false, wenn sicher nichts aufging (kein Link, Fenster vom Browser
-// blockiert). Sonst true; ob Spotify wirklich startet, lässt sich nicht prüfen.
+// Rückgabe: false, wenn sicher nichts aufging (kein gültiger Link, Fenster vom
+// Browser blockiert). Sonst true; ob Spotify wirklich startet, lässt sich nicht
+// prüfen.
 export function openSongTab(url) {
-  if (!url) return false;
+  // Geöffnet wird nie der übergebene Link selbst, sondern immer ein aus der
+  // Track-Kennung neu gebauter. Ungültige Links (falsche Domain, anderes
+  // Protokoll) öffnen gar nichts.
+  const id = trackId(url);
+  if (!id) return false;
+  const webUrl = `https://open.spotify.com/track/${id}`;
 
   // Desktop-App: nativ öffnen (kein Tab-Wildwuchs, ersetzt die Wiedergabe).
   if (typeof window !== "undefined" && window.hitster?.openSong) {
-    window.hitster.openSong(url);
+    window.hitster.openSong(webUrl);
     return true;
   }
 
-  const id = trackId(url);
   const modus = getSongOpenMode();
 
-  // Ohne erkennbare Track-Kennung bleibt nur der Tab.
-  if (!id || modus === "browser") {
-    return oeffneImTab(url);
+  if (modus === "browser") {
+    return oeffneImTab(webUrl);
   }
 
   versucheApp(id, modus === "auto");

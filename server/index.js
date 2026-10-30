@@ -34,7 +34,9 @@ const {
   listUsersBasic,
   adminCreateUser,
   adminDeleteUser,
-  adminSetUserHidden
+  adminSetUserHidden,
+  MAX_POINTS_PER_GAME,
+  MAX_VERSIONS_PER_GAME
 } = require('./auth')
 const {
   createRoom,
@@ -67,6 +69,9 @@ const {
   setBingoTimerMode,
   normalizeGameMode,
   normalizeBingoSettings,
+  getAllRooms,
+  mergeVersionsMeta,
+  MAX_SONG_POOLS,
 } = require('./rooms')
 const {
   getUserVersions,
@@ -76,6 +81,14 @@ const {
 const restrictedVersions = require('./restrictedVersions')
 const { dataPath } = require('./dataDir')
 const musicbrainz = require('./musicbrainz')
+const {
+  isValidSongUrl,
+  isPoolId,
+  sanitizePoolList,
+  sanitizeCardData,
+  scrubSongUrls,
+  text
+} = require('./validate')
 
 const app = express()
 const server = http.createServer(app)
@@ -92,7 +105,7 @@ if (process.env.TRUST_PROXY) {
 // ─── Middleware ────────────────────────────────────────────────────────────────
 
 // CORS-Whitelist: `ALLOWED_ORIGINS` als komma-getrennte Liste
-// (z. B. "https://hitster.example.com,https://hitster.no-ip.org").
+// (z. B. "https://hitster.example.com,https://spiel.example.org").
 // Ohne Setzen: Requests ohne Origin-Header (curl, Electron-Renderer, same-origin
 // vom mitgelieferten statischen Frontend) sind erlaubt, fremde Browser-Origins
 // werden abgelehnt. In Dev via `NODE_ENV != production` alles erlaubt, damit
@@ -156,6 +169,24 @@ const authLimiter = rateLimit({
       ? 'Zu viele Anmeldeversuche. Bitte warte kurz und versuche es dann erneut.'
       : 'Zu viele Anfragen. Bitte warte kurz und versuche es dann erneut.'
     res.status(options.statusCode).json({ error: 'rate_limited', message })
+  }
+})
+
+// Schreibzugriffe auf Versionen (eigene und geteilte): pro Konto, nicht pro
+// IP, weil mehrere Spieler hinter einem Router sitzen können. Großzügig genug
+// für das Hochladen aller vorgemerkten Änderungen nach dem Anmelden, aber kein
+// Dauerfeuer. Muss hinter authMiddleware stehen (braucht req.userId).
+const versionsWriteLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `user:${req.userId}`,
+  handler: (_req, res, _next, options) => {
+    res.status(options.statusCode).json({
+      error: 'rate_limited',
+      message: 'Zu viele Änderungen an Versionen. Bitte warte kurz und versuche es dann erneut.'
+    })
   }
 })
 
@@ -265,7 +296,7 @@ app.get('/api/versions', authMiddleware, (req, res) => {
 })
 
 // PUT /api/versions/:id  – synchronisierte Version anlegen/aktualisieren
-app.put('/api/versions/:id', authMiddleware, (req, res) => {
+app.put('/api/versions/:id', authMiddleware, versionsWriteLimiter, (req, res) => {
   try {
     const { version } = req.body || {}
     if (!version || typeof version !== 'object') {
@@ -282,7 +313,7 @@ app.put('/api/versions/:id', authMiddleware, (req, res) => {
 })
 
 // DELETE /api/versions/:id  – synchronisierte Version entfernen
-app.delete('/api/versions/:id', authMiddleware, (req, res) => {
+app.delete('/api/versions/:id', authMiddleware, versionsWriteLimiter, (req, res) => {
   const versions = deleteUserVersion(req.userId, req.params.id)
   res.json({ success: true, versions })
 })
@@ -306,7 +337,7 @@ app.get('/api/users/basic', authMiddleware, (_req, res) => {
 
 // POST – eigene Version teilen (aus einer Custom-Version). Legt eine neue
 // eingeschränkte Version mit dem aktuellen Nutzer als Ersteller an.
-app.post('/api/my/restricted-versions', authMiddleware, (req, res) => {
+app.post('/api/my/restricted-versions', authMiddleware, versionsWriteLimiter, (req, res) => {
   try {
     const { version } = req.body || {}
     if (!version || typeof version !== 'object') {
@@ -320,7 +351,7 @@ app.post('/api/my/restricted-versions', authMiddleware, (req, res) => {
 })
 
 // PUT – eigene geteilte Version bearbeiten (nur Ersteller oder Admin).
-app.put('/api/my/restricted-versions/:id', authMiddleware, (req, res) => {
+app.put('/api/my/restricted-versions/:id', authMiddleware, versionsWriteLimiter, (req, res) => {
   const existing = restrictedVersions.getById(req.params.id)
   if (!existing) return res.status(404).json({ error: 'not_found', message: 'Version nicht gefunden' })
   if (!restrictedVersions.canManage(existing, req.userId, isAdmin(req.userId))) {
@@ -345,7 +376,7 @@ app.put('/api/my/restricted-versions/:id', authMiddleware, (req, res) => {
 })
 
 // PATCH .../access – Freigaben der eigenen Version setzen (nur Ersteller/Admin).
-app.patch('/api/my/restricted-versions/:id/access', authMiddleware, (req, res) => {
+app.patch('/api/my/restricted-versions/:id/access', authMiddleware, versionsWriteLimiter, (req, res) => {
   const existing = restrictedVersions.getById(req.params.id)
   if (!existing) return res.status(404).json({ error: 'not_found', message: 'Version nicht gefunden' })
   if (!restrictedVersions.canManage(existing, req.userId, isAdmin(req.userId))) {
@@ -357,7 +388,7 @@ app.patch('/api/my/restricted-versions/:id/access', authMiddleware, (req, res) =
 })
 
 // DELETE – eigene geteilte Version entfernen (nur Ersteller/Admin).
-app.delete('/api/my/restricted-versions/:id', authMiddleware, (req, res) => {
+app.delete('/api/my/restricted-versions/:id', authMiddleware, versionsWriteLimiter, (req, res) => {
   const existing = restrictedVersions.getById(req.params.id)
   if (!existing) return res.status(404).json({ error: 'not_found', message: 'Version nicht gefunden' })
   if (!restrictedVersions.canManage(existing, req.userId, isAdmin(req.userId))) {
@@ -381,8 +412,11 @@ const ERROR_INFO = {
   image_invalid: [400, 'Ungültiges Bild'],
   security_question_invalid: [400, 'Bitte eine Sicherheitsfrage angeben (min. 5 Zeichen)'],
   security_answer_invalid: [400, 'Bitte eine Antwort auf die Sicherheitsfrage angeben'],
-  no_security_question: [404, 'Für diesen Account ist keine Sicherheitsfrage hinterlegt'],
-  answer_wrong: [403, 'Antwort auf die Sicherheitsfrage ist falsch']
+  // Bewusst ein Fehler für „Account gibt es nicht" und „keine Frage
+  // hinterlegt", damit sich darüber keine Accounts abfragen lassen.
+  recovery_unavailable: [404, 'Für diesen Benutzernamen ist keine Wiederherstellung per Sicherheitsfrage möglich'],
+  answer_wrong: [403, 'Antwort auf die Sicherheitsfrage ist falsch'],
+  username_in_room: [409, 'Den Namen kannst du nicht ändern, solange du in einem Raum bist. Verlasse zuerst den Raum.']
 }
 
 function fail (res, error) {
@@ -418,6 +452,14 @@ app.post('/api/recover/reset', authLimiter, async (req, res) => {
   try {
     const { username, answer, newPassword } = req.body || {}
     const result = await resetPasswordWithAnswer(username, answer, newPassword)
+    if (result.error === 'recovery_locked') {
+      const minuten = Math.max(1, Math.ceil(result.retryAfterSec / 60))
+      res.set('Retry-After', String(result.retryAfterSec))
+      return res.status(429).json({
+        error: 'recovery_locked',
+        message: `Zu viele falsche Antworten. Bitte versuche es in ${minuten} ${minuten === 1 ? 'Minute' : 'Minuten'} erneut.`
+      })
+    }
     if (!result.ok) return fail(res, result.error)
     res.json({ token: result.token, id: result.id, username: result.username })
   } catch (err) {
@@ -557,6 +599,11 @@ app.patch('/api/admin/restricted-versions/:id/access', authMiddleware, requireAd
 // PATCH /api/profile/username
 app.patch('/api/profile/username', authMiddleware, async (req, res) => {
   const { username } = req.body || {}
+  // Räume führen Mitglieder und Host über den Namen. Eine Umbenennung mitten
+  // im Raum ließe den alten Platz verwaisen, und ein neu registrierter Account
+  // mit dem frei gewordenen Namen könnte ihn übernehmen. Deshalb erst nach dem
+  // Verlassen aller Räume.
+  if (userIsInAnyRoom(req.username)) return fail(res, 'username_in_room')
   const result = await changeUsername(req.username, username)
   if (!result.ok) return fail(res, result.error)
   // Neues Token zurückgeben (enthält den aktuellen Anzeigenamen; Identität = id)
@@ -948,6 +995,7 @@ function findHostCandidate (room, roomCode, { excludeUsername = null, excludeSid
 // Oberfläche umschalten kann.
 function assignHost (room, roomCode, username, sid) {
   room.hostUsername = username
+  room.hostUserId = io.sockets.sockets.get(sid)?.userId || null
   hostSocketMap.set(roomCode, sid)
   io.to(sid).emit('hostAssigned', { roomCode })
   sendPendingRejoinsToHost(roomCode)
@@ -1092,6 +1140,122 @@ function cancelRoomCleanup (roomCode) {
   roomCleanupTimers.delete(roomCode)
 }
 
+// ── Grenzen und Aufräumen ─────────────────────────────────────────────────
+// Höchstzahl gleichzeitiger Räume auf dem Server (Schutz vor Speicherfluten).
+const MAX_ROOMS = 1000
+
+// Räume ohne jede Verbindung: Neben dem Aufräumen laufender Spiele (siehe
+// scheduleRoomCleanup) prüft ein Intervall jede Minute alle Räume. Ein Raum,
+// in dem seit ROOM_CLEANUP_MS kein Socket mehr steht, wird gelöscht, egal ob
+// Lobby oder Spiel. Vorher blieben etwa Lobbys liegen, deren Host gleich
+// einen zweiten Raum angelegt hatte, bis zum nächsten Neustart.
+const ROOM_SWEEP_MS = 60 * 1000
+function sweepEmptyRooms () {
+  const jetzt = Date.now()
+  for (const room of getAllRooms()) {
+    try {
+      if (roomHasSockets(room.code, null)) {
+        room.emptySince = null
+        continue
+      }
+      if (!room.emptySince) {
+        room.emptySince = jetzt
+        continue
+      }
+      if (jetzt - room.emptySince >= ROOM_CLEANUP_MS) {
+        cleanupRoom(room.code)
+        console.log(`[Aufräumen] Raum ${room.code} seit ${Math.round(ROOM_CLEANUP_MS / 60000)} Minuten ohne Verbindung gelöscht`)
+      }
+    } catch (err) {
+      console.error('[Aufräumen] Fehler beim Prüfen eines Raums:', err)
+    }
+  }
+}
+setInterval(sweepEmptyRooms, ROOM_SWEEP_MS).unref()
+
+// Legt ein Nutzer einen neuen Raum an, wird sein vorheriger Raum entfernt,
+// wenn dort kein Spiel läuft und außer ihm niemand drin ist. Sonst sammelt
+// jeder Klick auf „Raum erstellen" einen verwaisten Raum an. Räume mit
+// anderen Mitgliedern oder laufendem Spiel bleiben unangetastet (Rückkehr,
+// Failover), die erledigt das Aufräumen ohne Verbindung.
+function cleanupOwnIdleRooms (socket) {
+  for (const room of getAllRooms()) {
+    if (room.createdByUserId !== socket.userId) continue
+    if (slotsFrozen(room)) continue
+    const fremde = (room.players || []).some((slot) =>
+      (slot.members || []).some((m) => m !== socket.username))
+    if (fremde) continue
+    // Ein anderer Socket desselben Nutzers (zweiter Tab) ist noch dort.
+    if (otherSocketOfUser(socket.username, room.code, socket.id)) continue
+    try { socket.leave(room.code) } catch { /* war nicht im Raum */ }
+    cleanupRoom(room.code)
+    console.log(`[Aufräumen] Alten Raum ${room.code} von ${socket.username} entfernt (neuer Raum angelegt)`)
+  }
+}
+
+// Steht der Nutzer (per Name) noch in einem Raum: in einem Slot, als
+// Gegangener eines laufenden Spiels oder mit offener Rückkehr-Anfrage? Die
+// Host-Rolle allein zählt nicht, sie ist zusätzlich über die id abgesichert
+// (hostUserId, siehe joinRoom).
+function userIsInAnyRoom (username) {
+  for (const room of getAllRooms()) {
+    if ((room.players || []).some((slot) => (slot.members || []).includes(username))) return true
+    if (room.leftMembers?.has(username)) return true
+    if (pendingRejoins.get(room.code)?.has(username)) return true
+  }
+  return false
+}
+
+// Mitgliedschaft über den Namen, abgesichert über die stabile Nutzer-id: Hat
+// der Raum für diesen Namen schon eine id vermerkt, muss sie zum Socket
+// passen. Sonst übernähme ein neuer Account mit einem frei gewordenen Namen
+// (Umbenennung, gelöschter Account) den Platz eines anderen.
+function memberIdentityOk (room, socket) {
+  const ids = room?.memberUserIds
+  if (!ids || !Object.prototype.hasOwnProperty.call(ids, socket.username)) return true
+  // Steht der Name in keinem Slot mehr, ist der Platz frei, und der Vermerk
+  // wird beim nächsten Beitritt überschrieben.
+  const imSlot = (room.players || []).some((p) => (p.members || []).includes(socket.username))
+  if (!imSlot) return true
+  return ids[socket.username] === socket.userId
+}
+
+function rememberMemberId (room, socket) {
+  if (!room.memberUserIds) room.memberUserIds = Object.create(null)
+  room.memberUserIds[socket.username] = socket.userId
+}
+
+// Slot des Sockets im Raum (per Name, mit Identitätsprüfung) oder undefined.
+function mySlotIn (room, socket) {
+  if (!memberIdentityOk(room, socket)) return undefined
+  return (room?.players || []).find((p) => (p.members || []).includes(socket.username))
+}
+
+// ── Spielergebnis: Schutz vor Mehrfach- und Fantasiebuchungen ────────────
+// Verbucht wird höchstens einmal pro echtem Spiel. Ein Spiel beginnt mit
+// host:startGame oder (nach einem beendeten Spiel) mit host:gameRestarted
+// und muss mindestens MIN_GAME_MS gelaufen sein. Damit lässt sich die
+// Statistik nicht mehr per Skript im Sekundentakt hochtreiben.
+const MIN_GAME_MS = 60 * 1000
+// Punkte pro Spieler und Spiel. Herleitung aus den Spielregeln (Client,
+// useGameState.js): pro Karte höchstens 4 Punkte (Film-Modus, Titel +
+// Künstler + Film + Jahr), am Ende 3 Bonuspunkte für 10 Karten, dazu Punkte,
+// die der Host von Hand vergibt. Gedeckelt wird deshalb auf 4 Punkte je
+// gezogener Karte plus 3 Bonus plus 20 Punkte Spielraum für Handvergabe,
+// insgesamt höchstens MAX_POINTS_PER_GAME (500, siehe auth.js). Ein echtes
+// Spiel bis 10 Karten liegt weit darunter.
+const POINTS_PER_CARD_MAX = 4
+const POINTS_BONUS_MAX = 3
+const POINTS_MANUAL_ALLOWANCE = 20
+// Handvergabe über host:givePoints: höchstens so viel auf einmal.
+const GIVE_POINTS_MAX = 100
+
+function markGameStart (room) {
+  room.gameStartedAt = Date.now()
+  room.cardsDrawn = 0
+  room.resultRecorded = false
+}
+
 // Token-Validierung beim Verbindungsaufbau
 io.use((socket, next) => {
   const token = socket.handshake.auth?.token
@@ -1113,7 +1277,14 @@ io.on('connection', (socket) => {
   // ── Raum erstellen ──────────────────────────────────────────────────────────
   socket.on('createRoom', ({ settings } = {}) => {
     try {
-      const room = createRoom(socket.username, settings || {})
+      // Vorherigen leeren Raum desselben Nutzers abräumen, dann erst prüfen,
+      // ob der Server noch Platz hat.
+      cleanupOwnIdleRooms(socket)
+      if (getAllRooms().length >= MAX_ROOMS) {
+        socket.emit('error', { message: 'Auf dem Server sind gerade zu viele Räume offen. Bitte versuche es später erneut.' })
+        return
+      }
+      const room = createRoom(socket.username, settings || {}, socket.userId)
       socketUserMap.set(socket.id, { username: socket.username, roomCode: room.code })
       hostSocketMap.set(room.code, socket.id)
       socket.join(room.code)
@@ -1142,7 +1313,7 @@ io.on('connection', (socket) => {
         // zu), darf zurück, braucht dafür aber die Freigabe des Hosts
         // (requestRejoin). Alle anderen bleiben draußen. Während der
         // Siegerehrung gilt dasselbe, bis der Host zur Lobby wechselt.
-        const meinSlot = getRoom(code)?.players.find((p) => (p.members || []).includes(socket.username))
+        const meinSlot = mySlotIn(getRoom(code), socket)
         if (!meinSlot) {
           const msg = info.gameStarted
             ? 'Das Spiel in diesem Raum hat bereits begonnen'
@@ -1175,7 +1346,7 @@ io.on('connection', (socket) => {
       const room = getRoom(code)
       if (!room) return antworte({ error: `Raum "${code}" nicht gefunden` })
       if (!slotsFrozen(room)) return antworte({ error: 'Das Spiel in diesem Raum läuft nicht mehr' })
-      const meinSlot = room.players.find((p) => (p.members || []).includes(socket.username))
+      const meinSlot = mySlotIn(room, socket)
       if (!meinSlot) return antworte({ error: 'Du hast in diesem Spiel keinen Platz' })
       // Derselbe Nutzer ist schon im Raum (anderer Tab, oder dieser Socket
       // selbst): nichts freizugeben, der Beitritt ist ein normaler Reconnect.
@@ -1257,6 +1428,11 @@ io.on('connection', (socket) => {
       const code = (roomCode || '').toUpperCase().trim()
       const room = getRoom(code)
       if (!room) return fehler(`Raum "${code}" nicht gefunden`)
+      // Steht der Name im Raum, gehört er aber zu einem anderen Konto (frei
+      // gewordener Name), bekommt dieser Socket den Platz nicht.
+      if (!memberIdentityOk(room, socket)) {
+        return fehler('In diesem Raum ist dein Name schon für ein anderes Konto vergeben.')
+      }
       // Laufendes Spiel (oder Siegerehrung): nur wer schon einen Slot hat,
       // kommt hinein (Reconnect nach Neuladen oder Netzabbruch, oder Rückkehr
       // nach Freigabe). Neue Slots kennt der Spielstand des Hosts nicht,
@@ -1317,7 +1493,9 @@ io.on('connection', (socket) => {
       // in einem Slot ist, dort bleiben, sonst neuen Slot anlegen.
       const alreadyInSlot = room.players.some(p => p.members.includes(socket.username))
       if (!alreadyInSlot) {
-        const added = addPlayerToSlot(code, socket.username, slotId ?? null, slotName || socket.username)
+        const wunschName = typeof slotName === 'string' && slotName.trim() ? slotName : socket.username
+        const slotWahl = typeof slotId === 'number' ? slotId : null
+        const added = addPlayerToSlot(code, socket.username, slotWahl, wunschName)
         if (!added) {
           // Nichts hinzugefügt und der Raum ist jetzt leer: wie beim
           // normalen Entfernen abräumen, wenn auch niemand verbunden ist.
@@ -1325,12 +1503,16 @@ io.on('connection', (socket) => {
           return fehler(`Beitritt zu Raum "${code}" nicht möglich`)
         }
       }
+      rememberMemberId(room, socket)
       socketUserMap.set(socket.id, { username: socket.username, roomCode: code })
       await socket.join(code)
       // Host-Socket aktualisieren falls der Host beitritt. Hat der Raum gar
       // keinen verbundenen Host (Host hat verlassen, und beim Failover war
-      // niemand verbunden), übernimmt der Beitretende die Rolle.
-      if (room.hostUsername === socket.username) {
+      // niemand verbunden), übernimmt der Beitretende die Rolle. Ein gleicher
+      // Name mit anderer Nutzer-id ist nicht der Host.
+      const istHost = room.hostUsername === socket.username &&
+        (!room.hostUserId || room.hostUserId === socket.userId)
+      if (istHost) {
         hostSocketMap.set(code, socket.id)
         sendPendingRejoinsToHost(code)
       } else if (!roomHasConnectedHost(code)) {
@@ -1500,8 +1682,9 @@ io.on('connection', (socket) => {
       // einer Vorrunde.
       clearSongReady(room)
       clearRejoinState(room)
-      // Für Statistiken: Ergebnis-Guard für dieses Spiel zurücksetzen.
-      room.resultRecorded = false
+      // Für Statistiken: Beginn dieses Spiels merken, Ergebnis-Guard und
+      // Kartenzähler zurücksetzen (siehe host:recordGameResult).
+      markGameStart(room)
       // Spielstand der Vorrunde verwerfen. Sonst übernähme ein neu geladener
       // Host oder ein Nachfolger beim Failover vor dem ersten Sync den alten.
       room.gameState = null
@@ -1534,13 +1717,21 @@ io.on('connection', (socket) => {
         socket.emit('error', { message: 'Nur der Host kann eine Karte ziehen' })
         return
       }
+      // Der Link wird bei allen Gästen geöffnet. Nur gültige Spotify-Links
+      // gehen weiter, alles andere (etwa javascript:) bleibt beim Host.
+      if (!isValidSongUrl(songUrl)) {
+        socket.emit('error', { message: 'Der Song-Link dieser Karte ist ungültig und wurde nicht an die Mitspieler geschickt.' })
+        return
+      }
+      room.cardsDrawn = (room.cardsDrawn || 0) + 1
+      const karte = sanitizeCardData(cardData)
       if (room.audioMode === 'all-clients') {
         // Ready-Tracking initialisieren. Gezählt werden nur verbundene Slots.
         room.pendingSongUrl = songUrl
         room.songReadySlots = new Set()
         io.to(info.roomCode).emit('cardDrawn', {
           songUrl,
-          cardData,
+          cardData: karte,
           audioMode: room.audioMode,
           waitForReady: true,
           totalPlayers: songReadyCounts(room, info.roomCode).totalCount
@@ -1552,7 +1743,7 @@ io.on('connection', (socket) => {
         clearSongReady(room)
         io.to(info.roomCode).emit('cardDrawn', {
           songUrl,
-          cardData,
+          cardData: karte,
           audioMode: room.audioMode
         })
       }
@@ -1589,6 +1780,8 @@ io.on('connection', (socket) => {
       const room = getRoom(info.roomCode)
       if (!room || room.hostUsername !== socket.username) return
       if (!gameState || typeof gameState !== 'object') return
+      // Song-Links im Spielstand gehen an alle Gäste, ungültige werden zu null.
+      scrubSongUrls(gameState)
       room.gameState = gameState
       // Bingo: Titel/Künstler/Jahr der gezogenen Karte bis zur Auflösung
       // nicht an die Gäste geben (siehe sanitizeGameStateForGuests).
@@ -1746,15 +1939,15 @@ io.on('connection', (socket) => {
       // Im Battle-Modus waehlt jeder Spieler seine eigene Version -> geteilte
       // Pool-Liste nicht relevant.
       if (room.settings?.gameMode === 'battle') return
-      if (!Array.isArray(songPools) || songPools.length === 0) return
+      // Nur gültige Kennungen, höchstens MAX_SONG_POOLS. Bleibt nichts übrig,
+      // gilt die Anfrage als leer und wird ignoriert.
+      const pools = sanitizePoolList(songPools, MAX_SONG_POOLS)
+      if (pools.length === 0) return
       // Metadaten (Label/Cover) eigener/eingeschraenkter Versionen mitteilen,
-      // damit alle Clients sie anzeigen koennen.
-      const meta = versionsMeta && typeof versionsMeta === 'object' ? versionsMeta : {}
-      room.settings = {
-        ...room.settings,
-        songPools,
-        customVersionsMeta: { ...(room.settings?.customVersionsMeta || {}), ...meta }
-      }
+      // damit alle Clients sie anzeigen koennen. Gemerkt werden nur Einträge
+      // für gewählte Versionen, geprüft wie beim Anlegen des Raums.
+      room.settings = { ...room.settings, songPools: pools }
+      room.settings.customVersionsMeta = mergeVersionsMeta(room, versionsMeta, pools)
       emitRoomState(info.roomCode)
       console.log(`Song-Pools in Raum ${info.roomCode} geändert: ${describeVersions(room)}`)
     } catch (err) {
@@ -1777,14 +1970,17 @@ io.on('connection', (socket) => {
       }
       // Metadaten der eigenen (custom/eingeschraenkten) Battle-Version teilen,
       // damit Host/Mitspieler Label/Cover anzeigen koennen.
-      if (versionMeta && typeof versionMeta === 'object' && pool) {
-        room.settings = {
-          ...room.settings,
-          customVersionsMeta: { ...(room.settings?.customVersionsMeta || {}), [pool]: versionMeta }
-        }
+      const gewaehlt = (room.players || []).find((p) => (p.members || []).includes(socket.username))?.pool
+      room.settings = {
+        ...room.settings,
+        customVersionsMeta: mergeVersionsMeta(
+          room,
+          versionMeta && typeof versionMeta === 'object' && gewaehlt ? { [gewaehlt]: versionMeta } : null,
+          gewaehlt ? [gewaehlt] : []
+        )
       }
       emitRoomState(info.roomCode)
-      console.log(`Battle-Pool in Raum ${info.roomCode} von ${socket.username} auf "${pool}" gesetzt`)
+      console.log(`Battle-Pool in Raum ${info.roomCode} von ${socket.username} auf "${text(pool, 100)}" gesetzt`)
     } catch (err) {
       console.error('[player:setSlotPool] Fehler:', err)
     }
@@ -1797,9 +1993,13 @@ io.on('connection', (socket) => {
       if (!info) return
       const room = getRoom(info.roomCode)
       if (!room || room.hostUsername !== socket.username) return
+      // Nur ganze Zahlen in einem vernünftigen Rahmen. NaN, Infinity oder
+      // riesige Werte hätten den Punktestand dauerhaft unbrauchbar gemacht.
+      const d = Number(delta)
+      if (!Number.isInteger(d) || Math.abs(d) > GIVE_POINTS_MAX) return
       const slot = room.players.find(p => p.slotId === slotId)
       if (slot) {
-        slot.score = Math.max(0, (slot.score || 0) + Number(delta || 0))
+        slot.score = Math.max(0, Math.min(100000, (slot.score || 0) + d))
         emitRoomState(info.roomCode)
       }
     } catch (err) {
@@ -1993,24 +2193,46 @@ io.on('connection', (socket) => {
       const room = getRoom(info.roomCode)
       if (!room || room.hostUsername !== socket.username) return
       if (room.resultRecorded) return
-      room.resultRecorded = true
+      // Nur nach einem echten Spielstart, solange das Spiel läuft oder die
+      // Siegerehrung steht, und frühestens MIN_GAME_MS nach dem Start bzw.
+      // der letzten Verbuchung (Bingo-Korrekturen setzen den Guard zurück).
+      if (!room.gameStartedAt || !slotsFrozen(room)) return
+      const seit = Math.max(room.gameStartedAt, room.lastResultAt || 0)
+      if (Date.now() - seit < MIN_GAME_MS) {
+        console.log(`[Statistik] Ergebnis in Raum ${info.roomCode} verworfen (Spiel zu kurz)`)
+        return
+      }
       const mode = room.settings?.gameMode || 'normal'
-      const roomVersions = (room.settings?.songPools || []).filter(Boolean)
+      // Bingo: Die Sieger kennt der Server selbst. Ohne Sieger kein Ergebnis.
+      const bingoSieger = mode === 'bingo' ? room.bingoState?.winners : null
+      if (mode === 'bingo' && !(Array.isArray(bingoSieger) && bingoSieger.length)) return
+      room.resultRecorded = true
+      room.lastResultAt = Date.now()
+      const roomVersions = sanitizePoolList(room.settings?.songPools, MAX_VERSIONS_PER_GAME)
       const winners = new Set(
-        Array.isArray(winnerIndices) ? winnerIndices.map(Number) : []
+        mode === 'bingo'
+          ? room.players.map((p, i) => (bingoSieger.includes(p.slotId) ? i : -1)).filter((i) => i >= 0)
+          : (Array.isArray(winnerIndices) ? winnerIndices.slice(0, room.players.length).map(Number) : [])
       )
       const scoreArr = Array.isArray(scores) ? scores : []
+      // Höchstpunktzahl dieses Spiels (Herleitung siehe POINTS_PER_CARD_MAX).
+      const punkteGrenze = mode === 'bingo'
+        ? 0
+        : Math.min(
+          MAX_POINTS_PER_GAME,
+          (room.cardsDrawn || 0) * POINTS_PER_CARD_MAX + POINTS_BONUS_MAX + POINTS_MANUAL_ALLOWANCE
+        )
       const entries = []
       room.players.forEach((slot, index) => {
         const isTeam = (slot.members || []).length > 1
         // Punkte defensiv klemmen (Client ist hier autoritativ, aber ein
         // manipulierter Client soll keine absurden Werte einbuchen können).
         const rawPoints = Math.floor(Number(scoreArr[index]) || 0)
-        const points = Math.max(0, Math.min(10000, rawPoints))
+        const points = Math.max(0, Math.min(punkteGrenze, rawPoints))
         const isWinner = winners.has(index)
         // Battle: exakt die Version des Slots. Sonst: alle gewählten Raum-
         // Versionen (gemischter Pool zählt für jede gewählte Version).
-        const versions = slot.pool ? [slot.pool] : roomVersions
+        const versions = slot.pool && isPoolId(slot.pool) ? [slot.pool] : roomVersions
         for (const username of slot.members || []) {
           entries.push({ username, mode, versions, points, isWinner, isTeam })
         }
@@ -2030,6 +2252,9 @@ io.on('connection', (socket) => {
       if (!room || room.hostUsername !== socket.username) return
       room.gameStarted = false
       room.gameOver = false
+      // Zurück in der Lobby gibt es kein laufendes Spiel mehr, das verbucht
+      // werden könnte. Erst der nächste Start zählt wieder.
+      room.gameStartedAt = null
       clearSongReady(room)
       clearRejoinState(room)
       // Offene Rückkehr-Anfragen haben sich mit dem Spiel erledigt; wer will,
@@ -2075,12 +2300,14 @@ io.on('connection', (socket) => {
       if (!info) return
       const room = getRoom(info.roomCode)
       if (!room || room.hostUsername !== socket.username) return
+      // Neue Runde (Punkte behalten) ist ein neues Spiel für die Statistik,
+      // aber nur nach einem echten Start und wenn die vorige Runde beendet
+      // war (Siegerehrung). Ein Neustart mitten im Spiel macht aus derselben
+      // Runde kein zweites Spiel. Die Mindestdauer (MIN_GAME_MS) gilt ab hier.
+      if (room.gameStartedAt && room.gameOver) markGameStart(room)
       room.gameStarted = true
       room.gameOver = false
       clearSongReady(room)
-      // Neue Runde (Punkte behalten) ist ein neues Spiel für die Statistik.
-      // Ohne Reset verwürfe `host:recordGameResult` jedes weitere Ergebnis.
-      room.resultRecorded = false
       socket.to(info.roomCode).emit('gameRestarted')
       emitRoomState(info.roomCode)
     } catch (err) {
@@ -2158,7 +2385,12 @@ io.on('connection', (socket) => {
         return
       }
       // Song wie in anderen MP-Modi verteilen (Popup-Timing kommt vom Client).
-      if (songUrl) {
+      // Ungültige Links gehen nicht an die Mitspieler, die Runde läuft ohne
+      // Song weiter.
+      if (songUrl && !isValidSongUrl(songUrl)) {
+        socket.emit('error', { message: 'Der Song-Link dieser Karte ist ungültig und wurde nicht an die Mitspieler geschickt.' })
+      } else if (songUrl) {
+        ctx.room.cardsDrawn = (ctx.room.cardsDrawn || 0) + 1
         if (ctx.room.audioMode === 'all-clients') {
           ctx.room.pendingSongUrl = songUrl
           ctx.room.songReadySlots = new Set()

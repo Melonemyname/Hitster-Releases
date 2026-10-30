@@ -2499,6 +2499,7 @@ import {
 import AvatarStack from "../components/AvatarStack.vue";
 import { loadSlotAvatars, SLOT_AVATARS_EVENT } from "../utils/profileService";
 import { useVersions } from "../composables/useVersions";
+import { metaIcon } from "../utils/versionsCatalog";
 
 export default {
   name: "GamePage",
@@ -2851,7 +2852,7 @@ export default {
         const v = allVersions.value.find((x) => x.value === value);
         if (v) return { value, label: v.label, icon: v.icon || null };
         const m = roomVersionsMeta.value?.[value];
-        if (m) return { value, label: m.label, icon: m.icon || null };
+        if (m) return { value, label: m.label, icon: metaIcon(m) };
         return { value, label: "Nicht mehr verfügbar", icon: null };
       }),
     );

@@ -1,5 +1,5 @@
 # Taeglicher Trigger fuer hitster-update.service.
-# Zeitpunkt 04:00 (nach dem BorgBackup um 03:00). Persistent=true holt einen
+# Zeitpunkt 04:00, wenn niemand spielt. Persistent=true holt einen
 # verpassten Lauf nach (z. B. wenn der Rechner um 04:00 aus war).
 
 [Unit]

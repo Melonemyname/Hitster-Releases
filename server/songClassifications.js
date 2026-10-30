@@ -3,13 +3,11 @@
 // vergeben und dauerhaft in server/song-classifications.json abgelegt. Beim
 // nächsten Auftreten desselben Tracks entfällt die Nachfrage.
 //
-// Analog zu server/users.json wird die Datei absichtlich mit ins Repo
-// commited, damit ein zweiter Server-Rechner die gleiche Klassifikation
-// hat. Beim späteren Umzug auf einen dauerhaft laufenden Homeserver kann
-// sie – wie users.json – aus dem Repo entfernt werden.
+// Die Datei liegt wie alle Laufzeitdaten im DATA_DIR (siehe dataDir.js).
 
 const fs = require('fs')
 const { dataPath } = require('./dataDir')
+const { spotifyTrackId } = require('./validate')
 
 const STORE_FILE = dataPath('song-classifications.json')
 
@@ -49,19 +47,41 @@ function ensureCache () {
   return cache
 }
 
+// Schlüssel im Speicher: immer die kanonische Form
+// https://open.spotify.com/track/<id>. Nur gültige Spotify-Track-Links (siehe
+// validate.js) ergeben einen Schlüssel, alles andere wird ignoriert. Sonst
+// könnte ein Host beliebige Texte als Schlüssel ablegen und die Datei aufblähen.
+function storeKey (link) {
+  const id = spotifyTrackId(link)
+  return id ? `https://open.spotify.com/track/${id}` : ''
+}
+
+// Obergrenze für die Anzahl gespeicherter Einordnungen. Weit mehr als alle
+// mitgelieferten und üblichen eigenen Versionen zusammen.
+const MAX_EINTRAEGE = 50000
+
 function getClassification (link) {
-  const key = normalizeLink(link)
+  const key = storeKey(link)
   if (!key) return null
   const store = ensureCache()
-  const val = store[key]
+  // Ältere Einträge stehen unter der früheren Normalisierung, die für
+  // Web-Links dieselbe Form ergibt; für URIs wird zusätzlich dort gesucht.
+  const val = Object.prototype.hasOwnProperty.call(store, key)
+    ? store[key]
+    : store[normalizeLink(link)]
   return val === 'solo' || val === 'group' ? val : null
 }
 
 function setClassification (link, classification) {
-  const key = normalizeLink(link)
+  const key = storeKey(link)
   if (!key) return null
   if (classification !== 'solo' && classification !== 'group') return null
   const store = ensureCache()
+  const neu = !Object.prototype.hasOwnProperty.call(store, key)
+  if (neu && Object.keys(store).length >= MAX_EINTRAEGE) {
+    console.warn('[songClassifications] Speicher voll, Einordnung nicht gespeichert')
+    return null
+  }
   store[key] = classification
   writeStore(store)
   return classification

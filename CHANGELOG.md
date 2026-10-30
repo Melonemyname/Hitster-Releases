@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-10-30 – Version 1.0.23: Sicherheit
+
+### Sicherheit
+
+- Song-Links werden nur noch als Spotify-Link geöffnet und vom Server nur noch so
+  weitergegeben. Ein Host konnte Gästen im Browser vorher beliebige Adressen
+  unterschieben.
+- Die Statistik lässt sich nicht mehr aufblähen oder fälschen: Ein Spiel wird nur
+  einmal und frühestens nach einer Minute verbucht, Punkte sind nach den Spielregeln
+  begrenzt.
+- Die Passwort-Wiederherstellung sperrt ein Konto nach fünf falschen Antworten für
+  15 Minuten und verrät nicht mehr, ob ein Konto existiert.
+- Räume ohne Verbindung verschwinden nach zehn Minuten, Einstellungen und Namen sind
+  in der Länge begrenzt.
+- Eigene und geteilte Versionen: höchstens 50 pro Konto und 3000 Songs pro Version,
+  Cover nur als mitgeliefertes Bild oder eigenes hochgeladenes Bild.
+- Den Benutzernamen kann man nicht ändern, solange man in einem Raum ist.
+- Desktop-App: Electron 43.8.4, das Fenster verlässt die App nicht mehr, und der
+  Songs-Ordner lässt sich nur über den Auswahldialog setzen.
+- Server-Pakete mit bekannten Lücken (body-parser, socket.io, ws und weitere) sind
+  aktualisiert.
+
+### Lobby
+
+- Das Cover einer eigenen oder geteilten Version erscheint jetzt auch bei Mitspielern
+  auf anderen Geräten. Aus der Desktop-App kam bisher nur eine lokale Dateiadresse an.
+
 ## 2026-10-30 – Version 1.0.22: Cover nachträglich ändern
 
 ### Versionen
