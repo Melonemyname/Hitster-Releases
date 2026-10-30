@@ -14,6 +14,15 @@
 #   - Repo unter ~/Hitster  ->  %h expandiert zum Home-Verzeichnis
 #   - node unter /usr/bin/node  ->  pruefen mit `which node`; bei nvm den dortigen
 #     absoluten Pfad eintragen (systemd braucht einen absoluten ExecStart-Pfad).
+#   - DATA_DIR in server/.env ist ~/hitster-data (siehe OEFFENTLICH-HOSTEN.md).
+#     Liegt es woanders, ReadWritePaths unten anpassen.
+#
+# Sandbox: Das Backend ist aus dem Internet erreichbar. Gelingt dort ein
+# Einbruch, soll er nicht alles duerfen, was der Benutzer darf (~/.ssh, andere
+# Dienste, Dateien unter /srv). Deshalb ist das Dateisystem fuer den Dienst
+# schreibgeschuetzt, beschreibbar bleibt nur das DATA_DIR. Das Verzeichnis muss
+# existieren, sonst startet der Dienst nicht. Schreibfehler mit EROFS im Journal
+# heissen: Ein Pfad fehlt in ReadWritePaths.
 
 [Unit]
 Description=Hitster Backend (API + Socket.io)
@@ -27,6 +36,11 @@ EnvironmentFile=%h/Hitster/server/.env
 ExecStart=/usr/bin/node index.js
 Restart=always
 RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=%h/hitster-data
 
 [Install]
 WantedBy=default.target

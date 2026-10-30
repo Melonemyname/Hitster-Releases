@@ -8,6 +8,12 @@
 #   systemctl --user enable --now hitster-update.timer
 # Logs des letzten Laufs:
 #   journalctl --user -u hitster-update -e
+#
+# Sandbox: git pull, npm ci (samt den Install-Skripten aller Pakete) und der
+# Build duerfen nur in den Klon und die Caches von npm und den Downloads
+# (~/.cache, etwa fuer Electron) schreiben. Ein manipuliertes Paket kommt so
+# weder an das DATA_DIR noch an das restliche Home. Bei abweichendem Klonpfad
+# ReadWritePaths anpassen.
 
 [Unit]
 Description=Hitster: taeglicher git pull + Neustart
@@ -17,3 +23,8 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=%h/Hitster/deploy/hitster-update.sh
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=%h/Hitster %h/.npm -%h/.cache

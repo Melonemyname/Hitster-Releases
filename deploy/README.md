@@ -15,7 +15,7 @@ CGNAT-Prüfung steht in [`OEFFENTLICH-HOSTEN.md`](OEFFENTLICH-HOSTEN.md).
 | Datei | Zweck |
 |---|---|
 | `Caddyfile` | Reverse-Proxy mit automatischem Let's-Encrypt-HTTPS auf `127.0.0.1:3000`. |
-| `hitster-backend.service` | systemd **--user** Unit: startet `node index.js`, Auto-Restart, Start beim Boot (mit linger). |
+| `hitster-backend.service` | systemd **--user** Unit: startet `node index.js`, Auto-Restart, Start beim Boot (mit linger), in einer Sandbox mit Schreibrecht nur fürs `DATA_DIR`. |
 | `hitster-update.sh` | Update-Skript: `git pull --ff-only`, bei Bedarf `npm`-Install, `quasar build` (Frontend) und Backend-Neustart. Manuell ausführbar. |
 | `hitster-update.service` | systemd **--user** oneshot, das `hitster-update.sh` startet. |
 | `hitster-update.timer` | Löst den Update-Service täglich um 04:00 aus. |
@@ -24,6 +24,7 @@ CGNAT-Prüfung steht in [`OEFFENTLICH-HOSTEN.md`](OEFFENTLICH-HOSTEN.md).
 
 ```bash
 # 1. Konfiguration
+mkdir -p ~/hitster-data                 # DATA_DIR, die Dienst-Sandbox erwartet genau diesen Ordner
 cp server/.env.example server/.env      # JWT_SECRET, DATA_DIR, ALLOWED_ORIGINS eintragen
 
 # 2. Abhängigkeiten + erster Frontend-Build

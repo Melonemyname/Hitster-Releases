@@ -174,6 +174,28 @@ systemctl --user enable --now hitster-update.timer   # taegliches Update 04:00
 > `~/.config/systemd/user/hitster-backend.service` die `ExecStart=`-Zeile auf den
 > echten node-Pfad setzen und `systemctl --user daemon-reload && restart`.
 
+### Sandbox der Dienste
+
+Beide Dienste laufen in einer Sandbox von systemd: Das Dateisystem ist für sie
+schreibgeschützt. Das Backend darf nur ins `DATA_DIR` schreiben, der
+Update-Lauf nur in den Klon (`~/Hitster`) und die Caches `~/.npm` und
+`~/.cache`. Gelingt jemandem ein Einbruch ins Backend oder steckt in einem
+npm-Paket Schadcode, kommt er so nicht an `~/.ssh` oder andere Dienste auf dem
+Rechner.
+
+Die Pfade stehen in den Dienstdateien unter `ReadWritePaths=`. Wer `DATA_DIR`
+oder den Klon woanders anlegt als oben beschrieben, passt sie dort an. Stimmt
+ein Pfad nicht, startet der Dienst nicht oder meldet beim Schreiben `EROFS`
+(`journalctl --user -u hitster-backend -n 50`).
+
+Ob die Sandbox greift, zeigt dieser Befehl: `/` muss als `ro` erscheinen, das
+`DATA_DIR` als `rw`.
+
+```bash
+PID=$(systemctl --user show -p MainPID --value hitster-backend)
+awk '{print $5, $6}' /proc/$PID/mountinfo | grep -E '^/ |hitster-data'
+```
+
 ## 7. Pruefen
 
 ```bash
@@ -190,6 +212,8 @@ eintragen.
 
 - HTTPS erzwungen (Caddy leitet `http`→`https`), gueltiges Let's-Encrypt-Zertifikat.
 - Nur 80/443 nach aussen; das Node-Backend ist nur lokal (`127.0.0.1:3000`).
+- Backend und Update-Lauf in einer systemd-Sandbox, beschreibbar nur `DATA_DIR`
+  bzw. Klon und Caches (siehe Schritt 6).
 - `NODE_ENV=production` schaltet die CORS-Whitelist (`ALLOWED_ORIGINS`) scharf.
 - Login/Registrierung rate-limitiert; Passwoerter nur als bcrypt-Hash; Identitaet
   per JWT auf stabile Nutzer-UUID.
