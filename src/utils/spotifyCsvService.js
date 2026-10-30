@@ -7,9 +7,14 @@
 import { getMetadataCsvText } from './songDataProvider'
 import { getAllCustomTracks } from './customVersionsStore'
 import { getAllRestrictedTracks } from './restrictedVersionsStore'
+import { parseYears } from './songVariants'
 
 const metadataCache = new Map()
 let metadataIndexPromise = null
+// Fertig aufgebauter Index der Bundle-CSV, sobald buildBundledIndex einmal
+// durchgelaufen ist. Für synchrone Abfragen beim Ziehen (siehe
+// createMetadataLookup), ohne bei jedem Song auf ein Promise zu warten.
+let bundledIndexReady = null
 
 function normalizeText(rawText) {
   return String(rawText || '')
@@ -111,7 +116,9 @@ async function buildBundledIndex() {
 
       const title = String(row[titleIndex] || '').trim()
       const artist = String(row[artistIndex] || '').trim()
-      const year = extractYear(row[yearIndex])
+      // Mehrere Jahre mit `;` („1975;2011"): das erste ist das Hauptjahr.
+      const years = parseYears(row[yearIndex])
+      const year = years[0] || extractYear(row[yearIndex])
       const movie =
         movieIndex !== -1 ? String(row[movieIndex] || '').trim() : ''
       const ensemble =
@@ -123,11 +130,13 @@ async function buildBundledIndex() {
         artist,
         title,
         year,
+        years: years.length ? years : [year],
         movie,
         ensemble
       })
     }
 
+    bundledIndexReady = index
     return index
   })()
 
@@ -145,11 +154,14 @@ function buildCustomIndex() {
     const trackId = extractTrackId(track.trackId || track.url)
     const title = String(track.title || '').trim()
     const artist = String(track.artist || '').trim()
-    const year = Number(track.year) || 0
+    // Jahr kann seit 1.0.8 mehrere Einträge haben („1975;2011") – Number()
+    // ergäbe dafür NaN und der Song fiele raus.
+    const years = parseYears(track.year)
+    const year = years[0] || 0
     const movie = String(track.movie || '').trim()
     const ensemble = String(track.ensemble || '').trim()
     if (!trackId || !title || !artist || !year) continue
-    map.set(trackId, { artist, title, year, movie, ensemble })
+    map.set(trackId, { artist, title, year, years, movie, ensemble })
   }
   return map
 }
@@ -220,7 +232,7 @@ function normalizeSongKey(songKey) {
 async function getTrackMetadataWithCache(songKey = 'current') {
   const normalizedKey = normalizeSongKey(songKey)
   if (!normalizedKey) {
-    return { artist: '', title: '', year: 0, movie: '', ensemble: '' }
+    return { artist: '', title: '', year: 0, years: [], movie: '', ensemble: '' }
   }
 
   if (metadataCache.has(normalizedKey)) {
@@ -231,7 +243,7 @@ async function getTrackMetadataWithCache(songKey = 'current') {
   const metadata =
     bundled.get(normalizedKey) ||
     buildCustomIndex().get(normalizedKey) ||
-    { artist: '', title: '', year: 0, movie: '', ensemble: '' }
+    { artist: '', title: '', year: 0, years: [], movie: '', ensemble: '' }
   metadataCache.set(normalizedKey, metadata)
   return metadata
 }
@@ -250,10 +262,30 @@ async function filterSongLinksWithMetadata(songLinks = []) {
 function resetMetadataIndex() {
   metadataCache.clear()
   metadataIndexPromise = null
+  bundledIndexReady = null
   artistEnsembleCounts = null
 }
 
+/**
+ * Synchrone Nachschlage-Funktion „Song-Link -> Metadaten oder null".
+ *
+ * Gedacht für Durchläufe über viele Links auf einmal (Ziehen ohne doppelte
+ * Songs, Jahresspanne der Startkarte). Die Bundle-CSV muss dafür schon
+ * eingelesen sein, das passiert beim Laden der Song-Links. Der Index eigener
+ * Versionen wird einmal pro erzeugter Funktion gebaut, nicht pro Link.
+ */
+function createMetadataLookup() {
+  const bundled = bundledIndexReady
+  const custom = buildCustomIndex()
+  return (songKey) => {
+    const key = normalizeSongKey(songKey)
+    if (!key) return null
+    return metadataCache.get(key) || bundled?.get(key) || custom.get(key) || null
+  }
+}
+
 export {
+  createMetadataLookup,
   filterSongLinksWithMetadata,
   getTrackMetadataWithCache,
   resetMetadataIndex

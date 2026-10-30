@@ -1,22 +1,34 @@
 import { ref, computed, reactive, watch } from "vue";
 import { Notify } from "quasar";
 import { GAME_CONSTANTS } from "../utils/gameConstants";
-import { getTrackMetadataWithCache } from "../utils/spotifyCsvService";
+import {
+  createMetadataLookup,
+  getTrackMetadataWithCache,
+} from "../utils/spotifyCsvService";
+import { songIdentitySignature, yearsOf } from "../utils/songVariants";
 import {
   getKnownEditionValues,
   getSongPoolFileMapping,
 } from "../utils/songDataProvider";
 import { readCustomVersions } from "../utils/customVersionsStore";
 import { readRestrictedVersions } from "../utils/restrictedVersionsStore";
+import {
+  openSongTab,
+  canOpenSongWithoutClick,
+} from "../utils/songTabManager";
+import { addSavedGame, parseSnapshotText } from "../utils/savedGames";
 
 const SCORE_STORAGE_KEY = "hitster-player-scores-v1";
 const SESSION_STORAGE_KEY = "hitster-session-save-v1";
 const LEGACY_PLAYED_LINKS_KEY = "hitster-played-links";
 
+// Drei Töne minimal verschoben (vorher #2980b9, #9b59b6, #d35400), weil darauf
+// weder helle noch dunkle Schrift 4,5:1 erreichte (Barrierefreiheit, WCAG 1.4.3). Die
+// Schriftfarbe je Karte wählt Game.vue per readableTextOn().
 const CARD_COLORS = [
   "#1abc9c", "#16a085", "#2ecc71", "#27ae60", "#3498db",
-  "#2980b9", "#9b59b6", "#8e44ad", "#34495e", "#2c3e50",
-  "#f1c40f", "#f39c12", "#e67e22", "#d35400", "#e74c3c",
+  "#2a84bf", "#9854b4", "#8e44ad", "#34495e", "#2c3e50",
+  "#f1c40f", "#f39c12", "#e67e22", "#d65500", "#e74c3c",
   "#c0392b", "#95a5a6", "#7f8c8d", "#5f27cd", "#00d2d3",
   "#ff9f43", "#10ac84", "#ee5253", "#54a0ff", "#576574",
   "#222f3e", "#ff6b6b", "#48dbfb", "#1dd1a1", "#feca57",
@@ -77,6 +89,56 @@ export function resolveSongPools(songPoolsValue, songPoolFallback) {
   return safeDefault();
 }
 
+// ── Spielernamen in der URL ──────────────────────────────────────────────
+
+// Spielernamen gehen als JSON-Array in den Query-Parameter `names`. Früher
+// war das eine Komma-Liste, dabei zerfiel ein Teamname wie „Mama, Papa" in
+// zwei Namen. Gelesen werden beide Formate, damit alte Links weiter gehen.
+export function encodeNamesQuery(names) {
+  return JSON.stringify((names || []).map((n) => (n ?? "").toString()));
+}
+
+export function decodeNamesQuery(value) {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (raw === null || raw === undefined || raw === "") return [];
+  const text = raw.toString();
+  if (text.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) {
+        return parsed.map((n) => (n ?? "").toString());
+      }
+    } catch {
+      /* Kein JSON, also alte Komma-Liste (z. B. Name „[DJ]"). */
+    }
+  }
+  return text.split(",");
+}
+
+// Die laufenden Punkte liegen nach Spielername im Browser, damit ein Neuladen
+// der Spielseite sie nicht verliert. Ein neues Spiel muss sie deshalb leeren,
+// sonst erbt „Spieler 1" die Punkte von „Spieler 1" aus der Vorrunde, auch
+// wenn der Spielstand gar nicht gespeichert wurde.
+//
+// Damit ein anderes Spiel die Punkte nie erbt, liegen sie zusammen mit der
+// Spiel-ID `gid` aus der URL ({ gid, scores }). Die Startseite vergibt für
+// jedes neu gestartete lokale Spiel eine frische ID, ein Neuladen behält sie.
+// Früher hing die Zuordnung allein am Namen: Ein Onlinespiel mit den Namen
+// „Spieler 1/2" erbte so die Punkte eines lokalen Spiels, das per
+// Browser-Zurück verlassen wurde.
+export function clearStoredScores() {
+  try {
+    localStorage.removeItem(SCORE_STORAGE_KEY);
+  } catch {
+    /* Speicher nicht verfügbar, dann gibt es auch nichts zu erben. */
+  }
+}
+
+function queryText(value) {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return raw === null || raw === undefined ? "" : raw.toString().trim();
+}
+
 // ── Composable ───────────────────────────────────────────────────────────
 
 export function useGameState(route, router) {
@@ -108,7 +170,10 @@ export function useGameState(route, router) {
           ? "bingo"
           : "normal",
   );
-  // Bingo-Konfiguration aus Query (nur relevant im Bingo-Modus).
+  // Bingo-Konfiguration (nur relevant im Bingo-Modus). Die Query liefert nur
+  // den Startwert; danach gilt, was der Server per `roomState` schickt (etwa
+  // wenn der Host im Spiel zwischen Timer und Warten umschaltet), siehe
+  // useMultiplayer.
   const bingoSettings = reactive({
     difficulty:
       route.query.bingoDifficulty === "hard" ? "hard" : "easy",
@@ -238,6 +303,14 @@ export function useGameState(route, router) {
 
   // Song-Verwaltung
   const currentSongLink = ref(null);
+  // Welcher Song auf DIESEM Gerät zuletzt geöffnet wurde (bzw. das Öffnen
+  // angestoßen). Der Rate-Dialog sagt nur dann „wurde geöffnet“, wenn das der
+  // aktuelle Song ist. Ob Spotify wirklich aufgeht, lässt sich nicht abfragen.
+  const songOpenedUrl = ref(null);
+  // Song, der ohne Klick nicht geöffnet werden konnte (Browser blockiert
+  // `spotify:`/Popups ohne Nutzergeste). Die Oberfläche zeigt dafür den
+  // Knopf „Jetzt abspielen“.
+  const songPlayPromptUrl = ref(null);
   const preloadedLink = ref(null);
   const playedLinksHistory = ref([]);
   const allSongLinks = ref([]);
@@ -283,9 +356,23 @@ export function useGameState(route, router) {
 
   // Multiplayer-State (Refs die hier leben, Logik in useMultiplayer)
   const multiplayerMode = ref(false);
+  // Spiel-ID für den Punkte-Speicher, siehe clearStoredScores. Wird in
+  // initGame aus der URL übernommen und danach festgehalten, damit ein
+  // Speichern nach dem Wegnavigieren nicht unter fremder ID landet.
+  let scoreGameId = queryText(route.query.gid);
+  // Kennung des Spiels in der Liste gespeicherter Stände (savedGames.js).
+  // Jede neue Runde speichert still, mit derselben Kennung ersetzt das den
+  // Eintrag dieses Spiels, statt die Liste zu füllen. Ein geladener Stand
+  // bringt seine Kennung mit, Weiterspielen überschreibt dann diesen Eintrag.
+  let saveGameId =
+    scoreGameId ||
+    `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   const multiplayerIsHost = ref(false);
   const multiplayerRoomCode = ref("");
   const multiplayerAudioMode = ref("host-only");
+  // Name und Cover eigener und freigegebener Versionen aus dem Raum. Gäste
+  // kennen die Versionen des Hosts oft nicht im eigenen Katalog.
+  const roomVersionsMeta = ref({});
   const guestSlotIndex = ref(-1);
   const showSkipRequestDialog = ref(false);
   const skipRequestFrom = ref("");
@@ -385,26 +472,37 @@ export function useGameState(route, router) {
   const getRandomCardColor = () =>
     CARD_COLORS[Math.floor(Math.random() * CARD_COLORS.length)];
 
-  const buildSongSignature = (song) => {
-    if (!song) return "";
-    const title = (song.title || "").toString().trim().toLowerCase();
-    const artist = (song.artist || "").toString().trim().toLowerCase();
-    const year = Number(song.year || 0);
-    if (!title || !artist || !year) return "";
-    return `${title}__${artist}__${year}`;
-  };
+  // Kennung „Titel plus erster Künstler", normalisiert und ohne Fassungs-
+  // Hinweise (siehe songIdentitySignature). Früher war es der genaue Text
+  // samt Jahr, damit galten „Song" und „Song - Remastered" als verschieden.
+  // useSongManager überspringt beim Ziehen alle Links, deren Kennung schon
+  // in `playedSongs` steht.
+  const buildSongSignature = (song) => songIdentitySignature(song);
 
   const markSongAsPlayed = (song) => {
     const sig = buildSongSignature(song);
     if (sig && !playedSongs.value.includes(sig)) playedSongs.value.push(sig);
   };
 
+  // Liegt derselbe Song schon in einer Zeitleiste? Gleich heißt: gleiche
+  // Kennung und mindestens ein gemeinsames Jahr. Verglichen werden alle
+  // Jahres-Varianten, denn die Karte auf dem Tisch trägt womöglich das beim
+  // Raten gewählte Zweitjahr statt des Hauptjahrs.
   const isDuplicateOnTable = (card) => {
     const sig = buildSongSignature(card);
     if (!sig) return false;
+    const cardYears = new Set(yearsOf(card));
     for (const p of playerTimelines.value) {
       for (const c of p.cards) {
-        if (c && buildSongSignature(c) === sig) return true;
+        if (!c || c.placeholder || c.isStartCard) continue;
+        if (buildSongSignature(c) !== sig) continue;
+        const tableYears = yearsOf(c);
+        if (
+          cardYears.size === 0 ||
+          tableYears.length === 0 ||
+          tableYears.some((y) => cardYears.has(y))
+        )
+          return true;
       }
     }
     return false;
@@ -422,7 +520,10 @@ export function useGameState(route, router) {
     return {
       artist: currentCard.value.artist || "Unbekannt",
       title: currentCard.value.title || "Unbekannt",
-      year: currentCard.value.year || 0,
+      // placedYear: das Kartenjahr nach der Jahr-Eingabe (siehe submitGuess
+      // in useGuessEngine), bei mehreren Jahren evtl. nicht das Hauptjahr.
+      year: currentCard.value.placedYear || currentCard.value.year || 0,
+      years: currentCard.value.years || [],
       movie: currentCard.value.movie || "",
       songUrl: currentCard.value.songUrl || null,
       bgColor: currentCard.value.bgColor || getRandomCardColor(),
@@ -431,24 +532,41 @@ export function useGameState(route, router) {
 
   // ── Scoring ──────────────────────────────────────────────────────────
 
+  // Onlinespiele bekommen ihren Stand vom Host bzw. Server, gespeicherte
+  // Punkte haben dort nichts verloren. Abgefragt über die URL, weil initGame
+  // vor initMultiplayer läuft und multiplayerMode dann noch false ist.
+  const isOnlineGame = () =>
+    multiplayerMode.value ||
+    route.query.multiplayer === "1" ||
+    Boolean(queryText(route.query.roomCode));
+
   const loadStoredScores = () => {
+    if (!scoreGameId || isOnlineGame()) return {};
     try {
       const raw = localStorage.getItem(SCORE_STORAGE_KEY);
       if (!raw) return {};
       const parsed = JSON.parse(raw);
-      return parsed && typeof parsed === "object" ? parsed : {};
+      // Altes Format ohne gid (reine Namensliste) wird bewusst ignoriert.
+      if (!parsed || typeof parsed !== "object" || parsed.gid !== scoreGameId) return {};
+      return parsed.scores && typeof parsed.scores === "object" ? parsed.scores : {};
     } catch {
       return {};
     }
   };
 
   const saveStoredScores = () => {
+    // Ohne Spiel-ID könnte niemand die Punkte wieder diesem Spiel zuordnen.
+    // Geschrieben würde dann nur ein Stand, der ein anderes Spiel überdeckt.
+    if (!scoreGameId || isOnlineGame()) return;
     try {
       const scoreMap = {};
       for (const p of playerTimelines.value) {
         scoreMap[p.name] = Number(p.points || 0);
       }
-      localStorage.setItem(SCORE_STORAGE_KEY, JSON.stringify(scoreMap));
+      localStorage.setItem(
+        SCORE_STORAGE_KEY,
+        JSON.stringify({ gid: scoreGameId, scores: scoreMap }),
+      );
     } catch (e) {
       console.error("Fehler beim Speichern der Punkte:", e);
     }
@@ -562,7 +680,7 @@ export function useGameState(route, router) {
 
   const initGame = () => {
     if (route.query.names) {
-      playerNames.value = route.query.names.split(",");
+      playerNames.value = decodeNamesQuery(route.query.names);
     } else {
       playerNames.value = Array.from(
         { length: playerCount.value },
@@ -577,6 +695,10 @@ export function useGameState(route, router) {
       currentPlayerIndex.value = 0;
     }
 
+    scoreGameId = queryText(route.query.gid);
+    // Gespeicherte Punkte nur für das Neuladen genau dieses Spiels (gleiche
+    // gid, siehe loadStoredScores). Ein geladener Spielstand bringt seine
+    // Punkte selbst mit.
     const storedScores =
       route.query.loadSession === "1" ? {} : loadStoredScores();
     const carryScoresQuery = (route.query.carryScores || "").toString().trim();
@@ -589,15 +711,23 @@ export function useGameState(route, router) {
 
     playerTimelines.value = Array.from(
       { length: playerCount.value },
-      (_, i) => ({
-        name: playerNames.value[i],
-        cards: [],
-        objections: GAME_CONSTANTS.INITIAL_OBJECTIONS,
-        points:
+      (_, i) => {
+        const points =
           carryScoresByIndex.length > 0
             ? Number(carryScoresByIndex[i] || 0)
-            : Number(storedScores[playerNames.value[i]] || 0),
-      }),
+            : Number(storedScores[playerNames.value[i]] || 0);
+        // Punktestand zu Rundenbeginn. Die Statistik bekommt nur, was in
+        // dieser Runde dazukam (siehe getRoundPoints), sonst zählten
+        // mitgenommene Punkte bei jeder Runde erneut. Liegt am Spieler-Objekt,
+        // damit es mit den Zeitleisten an Gäste und einen neuen Host geht.
+        return {
+          name: playerNames.value[i],
+          cards: [],
+          objections: GAME_CONSTANTS.INITIAL_OBJECTIONS,
+          points,
+          roundStartPoints: points,
+        };
+      },
     );
     turnCounts.value = Array.from({ length: playerCount.value }, () => 0);
     if (carryScoresByIndex.length > 0) saveStoredScores();
@@ -608,6 +738,7 @@ export function useGameState(route, router) {
       player.cards = [];
       player.objections = GAME_CONSTANTS.INITIAL_OBJECTIONS;
       player.points = 0;
+      player.roundStartPoints = 0;
     });
     saveStoredScores();
     usedCards.value = [];
@@ -642,8 +773,14 @@ export function useGameState(route, router) {
     currentSongLink.value = null;
     preloadedLink.value = null;
     playedLinksHistory.value = [];
-    localStorage.removeItem(getPlayedLinksStorageKey());
-    localStorage.removeItem(LEGACY_PLAYED_LINKS_KEY);
+    // Gesperrter Speicher darf den Reset nicht abbrechen, sonst kämen
+    // `host:returnToLobby` und die Navigation unten nie an.
+    try {
+      localStorage.removeItem(getPlayedLinksStorageKey());
+      localStorage.removeItem(LEGACY_PLAYED_LINKS_KEY);
+    } catch {
+      /* Speicher nicht verfügbar, ignorieren. */
+    }
 
     // Bingo: gespiegelten Client-State + sessionStorage-Cache leeren,
     // damit ein Refresh nach dem Reset nicht mit alten Karten/Marks
@@ -680,7 +817,7 @@ export function useGameState(route, router) {
     if (!player.cards.length) return;
     const firstCard = player.cards[0];
     if (!firstCard.songUrl) {
-      Notify.create({ type: "warning", message: "Keine Song-URL für diese Karte verfügbar.", timeout: 2000 });
+      Notify.create({ type: "warning", message: "Für diese Karte ist kein Song-Link hinterlegt.", timeout: 2000 });
       return;
     }
     loadingFirstCard.value[playerIndex] = true;
@@ -690,6 +827,10 @@ export function useGameState(route, router) {
         firstCard.title = songData.title || "Unbekannt";
         firstCard.artist = songData.artist || "Unbekannt";
         firstCard.year = songData.year;
+        firstCard.years = songData.years || [];
+        // Gäste sehen die aktualisierte Karte sofort, nicht erst beim
+        // nächsten Anlass.
+        deps.syncMultiplayerState();
         Notify.create({ type: "positive", message: "Songdaten erfolgreich aktualisiert!", timeout: 2000 });
       } else {
         Notify.create({ type: "warning", message: "Songdaten konnten nicht aktualisiert werden.", timeout: 2000 });
@@ -702,12 +843,53 @@ export function useGameState(route, router) {
 
   // ── Draw Start Card ─────────────────────────────────────────────────
 
+  // Spanne der Hauptjahre (erstes Jahr eines Songs) im gewählten Pool. Im
+  // Battle-Modus zählt nur der Pool des Spielers, denn nur daraus zieht er.
+  // Hat dieser Pool keine Jahresdaten, gilt die ganze Auswahl. null, wenn
+  // gar keine Songdaten da sind.
+  const getStartYearRange = async (playerIndex) => {
+    const links = allSongLinks.value || [];
+    if (links.length === 0) return null;
+    // Stellt sicher, dass der Index der Bundle-CSV fertig ist, bevor die
+    // synchrone Nachschlage-Funktion ihn braucht.
+    await getTrackMetadataWithCache(links[0]);
+    const lookup = createMetadataLookup();
+    const collect = (pool) => {
+      let min = Infinity;
+      let max = -Infinity;
+      for (const link of links) {
+        if (pool && songLinkPoolMap.value.get(link) !== pool) continue;
+        const year = Number(lookup(link)?.year || 0);
+        if (!year) continue;
+        if (year < min) min = year;
+        if (year > max) max = year;
+      }
+      return min <= max ? { min, max } : null;
+    };
+    const ownPool =
+      playerSongPools.value.length > 0
+        ? playerSongPools.value[playerIndex]
+        : null;
+    return (ownPool && collect(ownPool)) || collect(null);
+  };
+
   const drawStartCard = async (playerIndex) => {
     const player = playerTimelines.value[playerIndex];
     if (player.cards.length > 0) return;
-    const minYear = 1990;
-    const maxYear = new Date().getFullYear();
+    // Gleichverteilt zwischen dem ältesten und dem jüngsten Song des Pools,
+    // damit die Startkarte zu den Songs passt (bei einer 60er-Version kein
+    // Startjahr 2015). Nur ohne Songdaten die feste Spanne ab 1990.
+    let range = null;
+    try {
+      range = await getStartYearRange(playerIndex);
+    } catch (e) {
+      console.warn("Jahresspanne für die Startkarte nicht ermittelbar:", e);
+    }
+    const minYear = range ? range.min : 1990;
+    const maxYear = range ? range.max : new Date().getFullYear();
     const randomYear = Math.floor(Math.random() * (maxYear - minYear + 1)) + minYear;
+    // Zwischen dem await und hier könnte schon eine Karte liegen (Doppelklick).
+    if (player.cards.length > 0) return;
     const card = {
       title: "",
       artist: "",
@@ -717,8 +899,37 @@ export function useGameState(route, router) {
     };
     player.cards.push(card);
     usedCards.value.push(card);
+    // Keine Meldung je Spieler: Das Jahr steht ohnehin in der Zeitleiste.
     deps.syncMultiplayerState();
-    Notify.create({ type: "positive", message: `Startkarte für ${player.name}: ${randomYear}`, timeout: 2000 });
+  };
+
+  // Song auf diesem Gerät öffnen und das für den Rate-Dialog vermerken.
+  // Liefert openSongTab false (etwa wenn der Browser das Fenster blockiert),
+  // gilt der Song als nicht geöffnet.
+  const openSongHere = (url) => {
+    if (!url) return;
+    songOpenedUrl.value = openSongTab(url) === false ? null : url;
+  };
+
+  // Für Aufrufe ohne Klick (Socket-Ereignis, Timer): öffnen, wenn der Browser
+  // es zulässt, sonst den Knopf „Jetzt abspielen“ anbieten. Ohne Nutzergeste
+  // wird gar nicht erst versucht, der Versuch liefe ins Leere und sein
+  // verzögerter Web-Player-Rückfall könnte später ein zweites Fenster öffnen.
+  const openSongOrPrompt = (url) => {
+    if (!url) return;
+    if (!canOpenSongWithoutClick()) {
+      songPlayPromptUrl.value = url;
+      return;
+    }
+    openSongHere(url);
+    songPlayPromptUrl.value = songOpenedUrl.value === url ? null : url;
+  };
+
+  // Klick auf „Jetzt abspielen“.
+  const playPromptedSong = () => {
+    const url = songPlayPromptUrl.value;
+    songPlayPromptUrl.value = null;
+    openSongHere(url);
   };
 
   // ── Manual Card ─────────────────────────────────────────────────────
@@ -749,6 +960,9 @@ export function useGameState(route, router) {
     };
     const insertIndex = getChronologicalInsertIndex(timeline, year);
     timeline.splice(insertIndex, 0, card);
+    // Die Karte wird direkt in die Timeline eingefügt, ein Watcher greift
+    // dabei nicht. Deshalb hier selbst an die Gäste schicken.
+    deps.syncMultiplayerState();
     Notify.create({
       type: "positive",
       message: `Karte für ${playerTimelines.value[pIdx].name} hinzugefügt (${year}).`,
@@ -824,6 +1038,66 @@ export function useGameState(route, router) {
     saveDialogCallbackPending.value = false;
   };
 
+  const buildSessionSnapshot = (norm) => {
+    const snapshot = {
+      savedAt: new Date().toISOString(),
+      sections: norm,
+      currentPlayerIndex: Number(currentPlayerIndex.value || 0),
+      playerCardCounts: playerTimelines.value.map((p) => Number(p.cards?.length || 0)),
+      // Modus, Kennung und Herkunft immer mitschreiben, auch ohne
+      // „gespielte Karten": Die Liste gespeicherter Stände zeigt den Modus an.
+      // Übernommen wird der Modus beim Laden weiter nur mit den Karten.
+      gameMode: gameMode.value,
+      gameId: saveGameId,
+      source: multiplayerMode.value ? "online" : "local",
+    };
+    if (norm.playerNames) {
+      snapshot.players = playerTimelines.value.map((p) => ({
+        name: p.name,
+        ...(norm.points ? { points: Number(p.points || 0) } : {}),
+      }));
+    }
+    if (norm.playedCards) {
+      snapshot.songPools = [...selectedSongPools.value];
+      snapshot.songPool = selectedSongPools.value[0] || "staffel1";
+      snapshot.playerSongPools = [...playerSongPools.value];
+      snapshot.playedLinksHistory = [...playedLinksHistory.value];
+      snapshot.playedSongs = [...playedSongs.value];
+    }
+    return snapshot;
+  };
+
+  // Stilles Zwischenspeichern im Browser, ohne Datei-Download und ohne
+  // Meldung. Für „Neue Runde, Punkte behalten": So lassen sich Punkte und
+  // gespielte Songs nach einem Absturz über „Spielstand laden" zurückholen,
+  // ohne dass jede Runde eine Datei herunterlädt.
+  const storeSessionSnapshotSilently = () => {
+    let snapshot = null;
+    try {
+      snapshot = buildSessionSnapshot({
+        playerNames: true,
+        points: true,
+        playedCards: true,
+      });
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(snapshot));
+    } catch (e) {
+      console.warn("Spielstand nicht im Browser gespeichert:", e);
+    }
+    rememberSnapshot(snapshot);
+  };
+
+  // Zusätzlich zum Einzelstand in die Liste gespeicherter Spiele. Eigenes
+  // try/catch, damit ein Fehler dort weder den Einzelstand noch den
+  // Datei-Download verhindert.
+  const rememberSnapshot = (snapshot) => {
+    if (!snapshot) return;
+    try {
+      addSavedGame(snapshot, { source: multiplayerMode.value ? "online" : "local" });
+    } catch (e) {
+      console.warn("Spielstand nicht in die Liste übernommen:", e);
+    }
+  };
+
   const saveSessionSnapshot = (options = { playerNames: true, points: true, playedCards: true }) => {
     try {
       const norm = {
@@ -835,27 +1109,16 @@ export function useGameState(route, router) {
         Notify.create({ type: "warning", message: "Bitte mindestens einen Bereich zum Speichern auswählen.", timeout: 2500 });
         return false;
       }
-      const snapshot = {
-        savedAt: new Date().toISOString(),
-        sections: norm,
-        currentPlayerIndex: Number(currentPlayerIndex.value || 0),
-        playerCardCounts: playerTimelines.value.map((p) => Number(p.cards?.length || 0)),
-      };
-      if (norm.playerNames) {
-        snapshot.players = playerTimelines.value.map((p) => ({
-          name: p.name,
-          ...(norm.points ? { points: Number(p.points || 0) } : {}),
-        }));
+      const snapshot = buildSessionSnapshot(norm);
+      // Ist der Speicher gesperrt oder voll, bleibt immer noch die Datei.
+      // Ohne eigenes try/catch fiele sonst auch der Download aus, und der
+      // Weg zurück in die Lobby hinge am Speichern-Dialog fest.
+      try {
+        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(snapshot));
+      } catch (e) {
+        console.warn("Spielstand nicht im Browser gespeichert:", e);
       }
-      if (norm.playedCards) {
-        snapshot.songPools = [...selectedSongPools.value];
-        snapshot.songPool = selectedSongPools.value[0] || "staffel1";
-        snapshot.playerSongPools = [...playerSongPools.value];
-        snapshot.gameMode = gameMode.value;
-        snapshot.playedLinksHistory = [...playedLinksHistory.value];
-        snapshot.playedSongs = [...playedSongs.value];
-      }
-      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(snapshot));
+      rememberSnapshot(snapshot);
       downloadSessionSnapshotFile(snapshot);
       const parts = [];
       if (norm.points) parts.push("Punkte + Spielernamen");
@@ -891,13 +1154,9 @@ export function useGameState(route, router) {
 
   const openSessionFilePicker = () => { sessionFileInput.value?.click(); };
 
-  const parseSnapshotFromImport = (text) => {
-    const parsed = JSON.parse(text);
-    if (parsed && typeof parsed === "object" && parsed.players) return parsed;
-    const rawSession = parsed?.["hitster-session-save-v1"];
-    if (typeof rawSession === "string") return JSON.parse(rawSession);
-    throw new Error("Datei enthält keinen gültigen Spielstand.");
-  };
+  // Prüfung liegt jetzt in savedGames.js, damit Startseite und Lobby
+  // dieselbe Regel nutzen können.
+  const parseSnapshotFromImport = (text) => parseSnapshotText(text);
 
   const handleSessionFileSelected = async (event) => {
     try {
@@ -926,13 +1185,38 @@ export function useGameState(route, router) {
     const shouldLoadPlayedCards = sec.playedCards === true;
     const savedLinks = Array.isArray(parsed.playedLinksHistory) ? parsed.playedLinksHistory : [];
     let loadedPlayersCount = playerCount.value;
+    if (typeof parsed.gameId === "string" && parsed.gameId) saveGameId = parsed.gameId;
+
+    const players = Array.isArray(parsed.players) ? parsed.players : [];
+    if (shouldLoadPlayers && players.length < GAME_CONSTANTS.MIN_PLAYERS) {
+      Notify.create({ type: "negative", message: "Gespeicherte Spielernamen/Punkte sind ungültig.", timeout: 2500 });
+      return;
+    }
+
+    // Einen laufenden Zug samt Einwand vollständig abräumen, bevor der
+    // Spielstand greift. Sonst laufen Opt-in-, Platzierungs- oder Auslosungs-
+    // Timer weiter und lösen danach einen Zug ohne Karte auf, oder ein
+    // Platzhalter bleibt als Lücke in einer Zeitleiste stehen.
+    deps.clearObjectionTimers?.();
+    clearFeedbackCountdown();
+    for (const p of playerTimelines.value) {
+      if (Array.isArray(p.cards)) p.cards = p.cards.filter((c) => c && !c.placeholder);
+    }
+    objectionOptInActive.value = false;
+    objectionOptIns.value = [];
+    objectionOptInCountdown.value = 0;
+    objectionQueue.value = [];
+    objectionQueuePos.value = 0;
+    objectionPlacementCountdown.value = 0;
+    objectionRaffleActive.value = false;
+    objectionRaffleNames.value = [];
+    objectionRaffleHighlight.value = 0;
+    objectionRaffleWinner.value = null;
+    correctObjectorNames.value = [];
+    objectionWinnerName.value = "";
+    playerIndexAfterResolution.value = null;
 
     if (shouldLoadPlayers) {
-      const players = Array.isArray(parsed.players) ? parsed.players : [];
-      if (players.length < GAME_CONSTANTS.MIN_PLAYERS) {
-        Notify.create({ type: "negative", message: "Gespeicherte Spielernamen/Punkte sind ungültig.", timeout: 2500 });
-        return;
-      }
       const scores = loadStoredScores();
       playerCount.value = players.length;
       loadedPlayersCount = players.length;
@@ -940,7 +1224,9 @@ export function useGameState(route, router) {
       playerTimelines.value = players.map((p, i) => {
         const name = p?.name || `Spieler ${i + 1}`;
         const pts = shouldLoadPoints ? Math.max(0, Number(p?.points || 0)) : Math.max(0, Number(scores[name] || 0));
-        return { name, cards: [], objections: GAME_CONSTANTS.INITIAL_OBJECTIONS, points: pts };
+        // Geladene Punkte stammen aus einem früheren Spiel und sind dort schon
+        // in die Statistik eingegangen, also zählt die Runde ab hier.
+        return { name, cards: [], objections: GAME_CONSTANTS.INITIAL_OBJECTIONS, points: pts, roundStartPoints: pts };
       });
     }
 
@@ -1091,78 +1377,125 @@ export function useGameState(route, router) {
 
   // ── Victory / Restart ───────────────────────────────────────────────
 
-  const getPointLeaders = () => {
-    const maxPts = Math.max(...playerTimelines.value.map((p) => Number(p.points || 0)));
-    const leaders = playerTimelines.value.filter((p) => Number(p.points || 0) === maxPts);
-    return { leaders, maxPoints: maxPts };
+  // Wer gewinnt, entscheiden allein die Karten. Punkte (Rate-Boni, der
+  // Bonus für 10 Karten) sind Anzeige und Statistik.
+
+  const joinNames = (names) =>
+    names.length > 1
+      ? `${names.slice(0, -1).join(", ")} und ${names[names.length - 1]}`
+      : names[0] || "";
+
+  const cardsText = (n) => (n === 1 ? "1 Karte" : `${n} Karten`);
+
+  // Platzhalter (gelegte, noch nicht aufgelöste Karte) zählen nicht mit.
+  const countCards = (player) =>
+    (player?.cards || []).filter((c) => c && !c.placeholder).length;
+
+  const getMostCardsLeaders = () => {
+    const counts = playerTimelines.value.map(countCards);
+    if (counts.length === 0) return { indices: [], maxCards: 0 };
+    const maxCards = Math.max(...counts);
+    const indices = counts
+      .map((c, i) => (c === maxCards ? i : -1))
+      .filter((i) => i >= 0);
+    return { indices, maxCards };
   };
 
-  const showPointsWinnerDialog = (subline) => {
-    const { leaders, maxPoints } = getPointLeaders();
-    if (leaders.length === 1) {
-      winnerName.value = leaders[0].name;
-      victoryHeadline.value = "hat gewonnen!";
-    } else {
-      winnerName.value = leaders.map((p) => p.name).join(", ");
-      victoryHeadline.value = "liegen punktgleich vorn.";
-    }
-    victorySubline.value = subline || `${maxPoints} Punkte`;
+  const getUniqueMostCardsPlayerIndex = () => {
+    const { indices } = getMostCardsLeaders();
+    return indices.length === 1 ? indices[0] : null;
+  };
+
+  // Punkte, die in dieser Runde dazukamen (Statistik). Grundlage ist der
+  // Stand zu Rundenbeginn, gesetzt bei Spielstart, beim Laden eines
+  // Spielstands und bei „Neue Runde, Punkte behalten".
+  const getRoundPoints = () =>
+    playerTimelines.value.map((p) =>
+      Math.max(0, Number(p.points || 0) - Number(p.roundStartPoints || 0)),
+    );
+
+  // Bei Spielende bekommt jeder mit mindestens MAX_CARDS Karten 3 Punkte.
+  const awardTenCardBonus = () => {
+    const withTen = playerTimelines.value
+      .map((p, i) => ({ p, i }))
+      .filter((e) => countCards(e.p) >= MAX_CARDS);
+    if (withTen.length === 0) return;
+    withTen.forEach((e) => addPoints(e.i, 3));
+    const names = joinNames(withTen.map((e) => e.p.name));
+    Notify.create({
+      type: "positive",
+      message:
+        withTen.length === 1
+          ? `${names} erhält 3 Bonuspunkte für mindestens ${MAX_CARDS} Karten.`
+          : `${names} erhalten je 3 Bonuspunkte für mindestens ${MAX_CARDS} Karten.`,
+      timeout: 3000,
+    });
+  };
+
+  const showWinnerDialog = (winnerIndices, subline) => {
+    const winners = winnerIndices
+      .map((i) => playerTimelines.value[i])
+      .filter(Boolean);
+    winnerName.value = joinNames(winners.map((p) => p.name));
+    victoryHeadline.value =
+      winners.length > 1 ? "haben gemeinsam gewonnen!" : "hat gewonnen!";
+    victorySubline.value = subline || "";
     showVictoryDialog.value = true;
     if (multiplayerMode.value && multiplayerIsHost.value) {
       // Ergebnis für die Statistik verbuchen (nur Online, nur Host). Punkte je
-      // Slot in Slot-Reihenfolge; Sieger = Punkt-Leader (bei Gleichstand mehrere).
-      const scores = playerTimelines.value.map((p) => Number(p.points || 0));
-      const winnerIndices = scores
-        .map((s, i) => (s === maxPoints ? i : -1))
-        .filter((i) => i >= 0);
-      deps.socketEmit("host:recordGameResult", { scores, winnerIndices });
+      // Slot in Slot-Reihenfolge, aber nur die dieser Runde: Bei „Punkte
+      // behalten" stünden sonst die Punkte der Vorrunden ein zweites Mal
+      // drin. Sieger sind die Spieler mit den meisten Karten.
+      const scores = getRoundPoints();
+      deps.socketEmit("host:recordGameResult", {
+        scores,
+        winnerIndices: [...winnerIndices],
+      });
       deps.socketEmit("host:syncGameOver", { winnerName: winnerName.value, headline: victoryHeadline.value });
       deps.socketEmit("host:gameEnded", {});
     }
   };
 
+  // Läuft nach jedem abgeschlossenen Zug. Das Spiel endet nur am Ende einer
+  // vollständigen Runde (alle hatten gleich viele Züge), wenn jemand
+  // mindestens MAX_CARDS Karten hat UND allein die meisten Karten hat. Teilen
+  // sich mehrere die meisten Karten, geht es mit der nächsten Runde weiter.
   const finalizeRoundIfTurnCountsAreEqual = () => {
     if (showVictoryDialog.value) return;
-    const hasTen = playerTimelines.value.some((p) => Number(p.cards.length || 0) >= MAX_CARDS);
+    const hasTen = playerTimelines.value.some((p) => countCards(p) >= MAX_CARDS);
     if (!hasTen) return;
     const minT = Math.min(...turnCounts.value);
     const maxT = Math.max(...turnCounts.value);
     if (minT !== maxT) return;
-    const withTen = playerTimelines.value
-      .map((p, i) => ({ p, i }))
-      .filter((e) => Number(e.p.cards.length || 0) >= MAX_CARDS);
-    if (withTen.length > 0) {
-      withTen.forEach((e) => addPoints(e.i, 3));
+    const { indices, maxCards } = getMostCardsLeaders();
+    if (indices.length > 1) {
+      const names = joinNames(indices.map((i) => playerTimelines.value[i].name));
       Notify.create({
-        type: "positive",
-        message: `${withTen.map((e) => e.p.name).join(", ")} erhalten +3 Punkte für 10 Karten!`,
-        timeout: 3000,
+        type: "info",
+        message: `Gleichstand: ${names} haben je ${cardsText(maxCards)}. Es geht weiter, bis nach einer Runde jemand allein vorn liegt.`,
+        timeout: 4000,
       });
+      return;
     }
-    showPointsWinnerDialog(`${MAX_CARDS}+ Karten und gleiche Rundenzahl erreicht.`);
+    awardTenCardBonus();
+    showWinnerDialog(
+      indices,
+      `Mit ${cardsText(maxCards)} allein vorn nach einer vollständigen Runde.`,
+    );
   };
 
-  const getUniqueMostCardsPlayerIndex = () => {
-    if (!playerTimelines.value.length) return null;
-    const counts = playerTimelines.value.map((p) => Number(p.cards.length || 0));
-    const max = Math.max(...counts);
-    const leaders = counts.map((c, i) => ({ c, i })).filter((x) => x.c === max);
-    return leaders.length === 1 ? leaders[0].i : null;
-  };
-
+  // Keine Songs mehr: Das Spiel endet sofort. Es gewinnen alle, die die
+  // meisten Karten haben, auch mehrere.
   const finalizeGameBecauseNoSongsLeft = () => {
     if (showVictoryDialog.value) return;
-    const idx = getUniqueMostCardsPlayerIndex();
-    if (idx !== null) {
-      addPoints(idx, 3);
-      Notify.create({
-        type: "positive",
-        message: `${playerTimelines.value[idx].name} erhält +3 Punkte für die meisten Karten!`,
-        timeout: 2500,
-      });
-    }
-    const { maxPoints } = getPointLeaders();
-    showPointsWinnerDialog(`Alle Songs wurden gespielt (${maxPoints} Punkte).`);
+    awardTenCardBonus();
+    const { indices, maxCards } = getMostCardsLeaders();
+    showWinnerDialog(
+      indices,
+      indices.length > 1
+        ? `Alle Songs wurden gespielt. Gemeinsam vorn mit je ${cardsText(maxCards)}.`
+        : `Alle Songs wurden gespielt. Vorn mit ${cardsText(maxCards)}.`,
+    );
   };
 
   const pickNextStarterIndexFromLastRound = () => {
@@ -1176,9 +1509,13 @@ export function useGameState(route, router) {
 
   const restartKeepingPlayersAndScores = () => {
     const nextStarter = pickNextStarterIndexFromLastRound();
+    deps.clearObjectionTimers?.();
+    clearFeedbackCountdown();
     playerTimelines.value.forEach((p) => {
       p.cards = [];
       p.objections = GAME_CONSTANTS.INITIAL_OBJECTIONS;
+      // Neue Runde für die Statistik: gezählt wird ab dem jetzigen Stand.
+      p.roundStartPoints = Number(p.points || 0);
     });
     turnCounts.value = Array.from({ length: playerCount.value }, () => 0);
     usedCards.value = [];
@@ -1203,11 +1540,23 @@ export function useGameState(route, router) {
     guessedMovie.value = "";
     guessResults.value = null;
     loadingNextSong.value = false;
-    playedSongs.value = [];
+    // `playedSongs` bleibt wie `playedLinksHistory` stehen: Gespielte Songs
+    // sollen auch in der nächsten Runde nicht wiederkommen.
     currentSongLink.value = null;
     preloadedLink.value = null;
     playerIndexAfterResolution.value = null;
     isObjectionPhase.value = false;
+    objectionOptInActive.value = false;
+    objectionOptIns.value = [];
+    objectionOptInCountdown.value = 0;
+    objectionQueue.value = [];
+    objectionQueuePos.value = 0;
+    objectionPlacementCountdown.value = 0;
+    objectionRaffleActive.value = false;
+    objectionRaffleNames.value = [];
+    objectionRaffleWinner.value = null;
+    correctObjectorNames.value = [];
+    objectionWinnerName.value = "";
     playerHasGuessed.value = false;
     currentPlayerIndex.value = nextStarter;
     showRestartDialog.value = false;
@@ -1215,14 +1564,16 @@ export function useGameState(route, router) {
     winnerName.value = "";
     victoryHeadline.value = "hat gewonnen!";
     victorySubline.value = "";
-    saveSessionSnapshot();
+    // Früher saveSessionSnapshot() mit Datei-Download und Meldung in jeder
+    // Runde. Jetzt nur still in den Browser.
+    storeSessionSnapshotSilently();
     if (multiplayerMode.value && multiplayerIsHost.value) {
       deps.socketEmit("host:gameRestarted", {});
       deps.syncMultiplayerState();
     }
     Notify.create({
       type: "positive",
-      message: `${playerTimelines.value[nextStarter].name} startet die neue Runde (wenigste Karten in der letzten Runde).`,
+      message: `Neue Runde: ${playerTimelines.value[nextStarter].name} beginnt (wenigste Karten in der letzten Runde).`,
       timeout: 3000,
     });
   };
@@ -1251,7 +1602,10 @@ export function useGameState(route, router) {
       // danach zur Startseite. Vorher gab es hier gar keinen Dialog –
       // ein versehentlicher Klick auf „Zur Lobby" verwarf den Spielstand
       // ohne Rückfrage.
+      // Die Punkte stehen, falls gewünscht, jetzt im gespeicherten Stand.
+      // Der Punkte-Speicher selbst gehört zum beendeten Spiel.
       openSaveSessionDialog(() => {
+        clearStoredScores();
         router.push("/");
       });
     }
@@ -1266,9 +1620,13 @@ export function useGameState(route, router) {
         router.push("/lobby");
       });
     } else {
-      localStorage.removeItem(SCORE_STORAGE_KEY);
-      localStorage.removeItem(getPlayedLinksStorageKey());
-      localStorage.removeItem(LEGACY_PLAYED_LINKS_KEY);
+      try {
+        localStorage.removeItem(SCORE_STORAGE_KEY);
+        localStorage.removeItem(getPlayedLinksStorageKey());
+        localStorage.removeItem(LEGACY_PLAYED_LINKS_KEY);
+      } catch {
+        /* Speicher nicht verfügbar, Navigation trotzdem ausführen. */
+      }
       router.push("/");
     }
   };
@@ -1292,6 +1650,12 @@ export function useGameState(route, router) {
         renameOnly: 1,
         songPools: selectedSongPools.value.join(","),
         songPool: selectedSongPools.value[0] || "staffel1",
+        // Modus und Battle-Pools mitgeben, sonst startete die nächste Runde
+        // still im Normalmodus. Index.vue liest beide Schlüssel aus.
+        mode: gameMode.value,
+        ...(playerSongPools.value.length > 0
+          ? { playerSongPools: playerSongPools.value.join(",") }
+          : {}),
       },
     });
   };
@@ -1355,8 +1719,9 @@ export function useGameState(route, router) {
     startFeedbackCountdown,
     closeFeedback,
     // Victory / Restart
-    getPointLeaders,
-    showPointsWinnerDialog,
+    getMostCardsLeaders,
+    getRoundPoints,
+    showWinnerDialog,
     finalizeRoundIfTurnCountsAreEqual,
     getUniqueMostCardsPlayerIndex,
     finalizeGameBecauseNoSongsLeft,
@@ -1405,6 +1770,11 @@ export function useGameState(route, router) {
     hasAnySaveSessionOption,
     turnCounts,
     currentSongLink,
+    songOpenedUrl,
+    openSongHere,
+    songPlayPromptUrl,
+    openSongOrPrompt,
+    playPromptedSong,
     preloadedLink,
     playedLinksHistory,
     allSongLinks,
@@ -1445,6 +1815,7 @@ export function useGameState(route, router) {
     multiplayerIsHost,
     multiplayerRoomCode,
     multiplayerAudioMode,
+    roomVersionsMeta,
     guestSlotIndex,
     showSkipRequestDialog,
     skipRequestFrom,

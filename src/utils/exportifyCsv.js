@@ -28,6 +28,7 @@ const COLUMN_ALIASES = {
   artist: "artist",
   "album release date": "release_date",
   "release date": "release_date",
+  isrc: "isrc",
 };
 
 function parseCsvLine(line) {
@@ -71,6 +72,16 @@ function extractYear(releaseDate) {
   return m ? Number.parseInt(m[1], 10) : 0;
 }
 
+// ISRC (International Standard Recording Code) einer Aufnahme: zwölf Zeichen,
+// in Exportify-Exporten ohne Bindestriche, in anderen Quellen auch mit. Für
+// den Abgleich mit MusicBrainz einheitlich in Großbuchstaben ohne Trenner.
+function normalizeIsrc(value) {
+  const v = String(value || "")
+    .replace(/[\s-]/g, "")
+    .toUpperCase();
+  return /^[A-Z0-9]{12}$/.test(v) ? v : "";
+}
+
 function buildColumnIndex(header) {
   const idx = {};
   header.forEach((col, i) => {
@@ -80,7 +91,7 @@ function buildColumnIndex(header) {
   return idx;
 }
 
-// CSV-Rohtext -> [{ trackId, title, artist, year, url }]
+// CSV-Rohtext -> [{ trackId, title, artist, year, url, isrc? }]
 export function parseExportifyCsv(rawText) {
   const text = String(rawText || "")
     .split("\u0000")
@@ -112,13 +123,18 @@ export function parseExportifyCsv(rawText) {
     // Songs ohne Jahr/Titel/Künstler würden im Spiel gefiltert -> überspringen.
     if (!title || !artist || !year) continue;
     seen.add(trackId);
-    tracks.push({
+    const track = {
       trackId,
       title,
       artist,
       year,
       url: `https://open.spotify.com/track/${trackId}`,
-    });
+    };
+    // Die ISRC wandert mit in die Version: Über sie findet MusicBrainz die
+    // Aufnahme eindeutig, auch Jahre später beim Nachprüfen im Editor.
+    const isrc = normalizeIsrc(field(row, "isrc"));
+    if (isrc) track.isrc = isrc;
+    tracks.push(track);
   }
   return tracks;
 }
@@ -142,18 +158,28 @@ function splitArtists(raw) {
 }
 
 /**
+ * Gastbeitrag im Titel, etwa „4 Minutes (feat. Justin Timberlake)". Spotify
+ * führt den Gast oft nur im Titel, das Künstlerfeld enthält dann allein
+ * „Madonna". Nach der Trennregel ist so ein Song trotzdem ein Zusammenschluss.
+ */
+const TITEL_FEAT = /\b(?:feat|ft)\.|\b(?:feat|featuring)\s/i;
+
+/**
  * Band/Solo für einen Künstler aus dem bekannten Bestand ableiten.
  *
- * Reihenfolge ist wichtig: Erst der exakte Treffer, denn manche Künstler
- * tragen ein Trennzeichen im eigenen Namen („AC/DC", „Tyler, The Creator").
- * Steht so einer im Bestand, gewinnt sein gepflegter Wert. Erst danach greift
- * die Trennregel, die einen unbekannten Namen mit Trennzeichen als
+ * Reihenfolge ist wichtig: Ein Gast im Titel entscheidet zuerst, denn der
+ * gepflegte Wert des Hauptkünstlers („Madonna" ist Solo) gilt nicht für ein
+ * Duett. Dann der exakte Treffer, denn manche Künstler tragen ein
+ * Trennzeichen im eigenen Namen („AC/DC", „Tyler, The Creator"). Steht so
+ * einer im Bestand, gewinnt sein gepflegter Wert. Erst danach greift die
+ * Trennregel, die einen unbekannten Namen mit Trennzeichen als
  * Zusammenschluss liest. Ist nichts bekannt, bleibt das Feld leer statt
  * geraten.
  */
-export function guessEnsemble(artist, index) {
+export function guessEnsemble(artist, index, title = "") {
   const raw = String(artist || "").trim();
   if (!raw) return "";
+  if (TITEL_FEAT.test(String(title || ""))) return "Band";
   const known = index.get(normalizeArtistName(raw));
   if (known) return known;
   return splitArtists(raw).length > 1 ? "Band" : "";
@@ -165,7 +191,7 @@ export async function fillEnsemble(tracks) {
   return (tracks || []).map((track) =>
     String(track.ensemble || "").trim()
       ? track
-      : { ...track, ensemble: guessEnsemble(track.artist, index) },
+      : { ...track, ensemble: guessEnsemble(track.artist, index, track.title) },
   );
 }
 

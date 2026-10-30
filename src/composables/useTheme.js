@@ -62,6 +62,18 @@ function applyToDom () {
   root.style.setProperty('--app-accent', c.accent)
   root.style.setProperty('--app-accent-hover', c.accentHover)
   root.style.setProperty('--app-on-accent', c.onAccent)
+  // Barrierefreiheit (WCAG 2.1 AA, siehe themeColors.js): Akzent als Text auf
+  // Flächen, Schrift auf Flächen, Halo für Text direkt auf dem Hintergrund und
+  // die je Theme nötige Deckkraft der Acryl-Flächen.
+  root.style.setProperty('--app-accent-text', c.accentText)
+  root.style.setProperty('--app-on-surface', c.onSurface)
+  root.style.setProperty('--app-on-surface-muted', c.onSurfaceMuted)
+  root.style.setProperty('--app-on-bg-halo', c.onBgHalo)
+  root.style.setProperty('--surface-bg', c.surfaceBg)
+  root.style.setProperty('--app-positive-text', c.positiveText)
+  root.style.setProperty('--app-negative-text', c.negativeText)
+  root.style.setProperty('--app-warning-text', c.warningText)
+  root.style.setProperty('--app-on-positive', c.onPositive)
   // Flag für „Standard-/kein Theme" (Fallback-Effekte im CSS).
   root.setAttribute('data-default-theme', isDefaultTheme(state) ? 'true' : 'false')
   // Quasar-Palette überschreiben (nur Marken-/Akzentfarben; semantische

@@ -114,12 +114,16 @@ export async function updateUsername (username) {
   return data
 }
 
+// Passwort ändern → der Server macht alle bisherigen Tokens ungültig und
+// schickt ein neues mit, das die Session hier sofort übernimmt.
 export async function updatePassword (oldPassword, newPassword) {
-  return handle(await fetch(`${SERVER_URL}/api/profile/password`, {
+  const data = await handle(await fetch(`${SERVER_URL}/api/profile/password`, {
     method: 'PATCH',
     headers: authHeaders(),
     body: JSON.stringify({ oldPassword, newPassword })
   }))
+  if (data && data.token) setSession(data.token, data.username, data.id)
+  return data
 }
 
 // Sicherheitsfrage + Antwort setzen/ändern (eingeloggt).

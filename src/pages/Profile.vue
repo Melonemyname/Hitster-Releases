@@ -2,8 +2,15 @@
   <q-page class="profile-page">
     <div class="profile-container">
       <div class="row items-center q-mb-lg">
-        <q-btn flat round icon="arrow_back" @click="goBack" />
-        <div class="text-h5 q-ml-sm">Mein Profil</div>
+        <q-btn
+          flat
+          round
+          icon="arrow_back"
+          aria-label="Zurück"
+          @click="goBack"
+        />
+        <!-- Seitenüberschrift als h1; Optik bleibt über text-h5. -->
+        <h1 class="text-h5 q-ml-sm q-my-none">Mein Profil</h1>
       </div>
 
       <q-inner-loading :showing="initialLoading">
@@ -29,15 +36,16 @@
                 :loading="avatarLoading"
                 dense
                 no-caps
-                aria-label="Profilbild wählen"
+                aria-label="Bild wählen"
                 @click="pickAvatar"
               >
                 <span class="gt-xs q-ml-sm">Bild wählen</span>
               </q-btn>
+              <!-- Der zugängliche Name beginnt mit der sichtbaren Beschriftung
+                   (WCAG 2.5.3), unter 600px ist nur das Symbol zu sehen. -->
               <q-btn
                 v-if="profile.avatar"
                 flat
-                color="grey"
                 icon="delete"
                 :disable="avatarLoading"
                 dense
@@ -62,10 +70,16 @@
         <!-- Benutzername -->
         <q-card class="profile-card q-mb-md">
           <q-card-section>
-            <div class="text-subtitle1 q-mb-sm">Benutzername</div>
+            <!-- Die Zwischenüberschrift ist zugleich das Label des Feldes
+                 (for/id), sonst hätte das Eingabefeld keinen Namen. -->
+            <label for="profile-username" class="block text-subtitle1 q-mb-sm">
+              Benutzername
+            </label>
             <q-form @submit.prevent="onSaveUsername">
               <q-input
                 v-model="usernameInput"
+                for="profile-username"
+                autocomplete="username"
                 outlined
                 dark
                 dense
@@ -97,6 +111,7 @@
               <q-input
                 v-model="oldPassword"
                 type="password"
+                autocomplete="current-password"
                 outlined
                 dark
                 dense
@@ -109,6 +124,7 @@
               <q-input
                 v-model="newPassword"
                 type="password"
+                autocomplete="new-password"
                 outlined
                 dark
                 dense
@@ -124,6 +140,7 @@
               <q-input
                 v-model="newPasswordConfirm"
                 type="password"
+                autocomplete="new-password"
                 outlined
                 dark
                 dense
@@ -150,12 +167,12 @@
         <q-card class="profile-card q-mb-md">
           <q-card-section>
             <div class="text-subtitle1 q-mb-sm">Sicherheitsfrage</div>
-            <div v-if="profile.securityQuestion" class="text-caption text-grey q-mb-sm">
+            <div v-if="profile.securityQuestion" class="text-caption text-muted q-mb-sm">
               Aktuell hinterlegt: {{ profile.securityQuestion }}
             </div>
             <q-banner v-else dense class="q-mb-sm rounded-borders">
               <template #avatar><q-icon name="warning" color="orange" /></template>
-              Noch keine Sicherheitsfrage hinterlegt – ohne sie ist keine
+              Noch keine Sicherheitsfrage hinterlegt. Ohne sie ist keine
               Passwort-Wiederherstellung möglich.
             </q-banner>
             <q-form ref="securityForm" @submit.prevent="onSaveSecurity">
@@ -382,7 +399,8 @@ export default {
   padding: 24px 16px 48px;
 }
 .profile-card {
-  color: #fff;
+  /* Flächenschrift über das Token statt fest #fff (Theming-Regel). */
+  color: var(--app-on-surface);
   border-radius: 12px;
 }
 .hidden {

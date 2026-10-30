@@ -59,6 +59,10 @@ module.exports = configure(function (ctx) {
       config: {
         dark: 'auto'
       },
+      // Die App ist durchgehend deutsch. Quasar setzt damit <html lang="de">
+      // (vorher en-US, Screenreader lasen deutsch mit englischer Aussprache)
+      // und übersetzt seine eigenen Texte (z. B. Paginierung, Datumswahl).
+      lang: 'de',
       plugins: ['Notify', 'Dark', 'Dialog']
     },
 
@@ -176,6 +180,18 @@ module.exports = configure(function (ctx) {
           // .deb/.rpm verlangen zwingend eine Maintainer-Angabe.
           // Bitte bei Bedarf durch echte E-Mail-Adresse ersetzen.
           maintainer: 'thorb <thorb@users.noreply.github.com>',
+          // Unter Wayland über XWayland laufen, sonst wirkt "Immer im
+          // Vordergrund" nicht. Landet in der Exec-Zeile der .desktop-Datei,
+          // die App muss sich dann nicht erst selbst neu starten (siehe
+          // electron-main.js, der Neustart deckt den Start von Hand ab).
+          executableArgs: ['--ozone-platform=x11'],
+        },
+        // Fester Dateiname ohne Versionsnummer. electron-updater überschreibt
+        // die AppImage dann an Ort und Stelle. Mit Version im Namen legt jedes
+        // Update eine neue Datei an und löscht die alte, und jeder Starter,
+        // der auf den alten Namen zeigt, läuft ins Leere.
+        appImage: {
+          artifactName: '${productName}.${ext}',
         },
       },
     },

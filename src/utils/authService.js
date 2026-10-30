@@ -10,6 +10,7 @@
 
 import { ref } from 'vue'
 import { clearRestrictedVersions } from './restrictedVersionsStore'
+import { removeSyncedCustomVersions } from './customVersionsStore'
 
 const TOKEN_KEY = 'hitster-auth-token'
 const USERNAME_KEY = 'hitster-auth-username'
@@ -87,11 +88,27 @@ export const adminState = ref(getIsAdmin())
 // werden nur überschrieben, wenn übergeben (z. B. Username-Änderung ändert die
 // Admin-Rolle nicht).
 export function setSession (token, username, id, isAdmin) {
+  // Kommt ein anderes Konto zum Zug, ohne dass vorher abgemeldet wurde (etwa
+  // eine Registrierung aus einer laufenden Sitzung heraus), gehören die
+  // gespiegelten Versionen des bisherigen nicht mehr auf das Gerät. Sonst
+  // gingen dessen vorgemerkte Änderungen in das neue Konto.
+  const previousId = localStorage.getItem(ID_KEY)
+  if (id && previousId && previousId !== id) {
+    removeSyncedCustomVersions()
+    clearRestrictedVersions()
+  }
   localStorage.setItem(TOKEN_KEY, token)
   localStorage.setItem(USERNAME_KEY, username)
   if (id !== undefined && id !== null) localStorage.setItem(ID_KEY, id)
   setIsAdmin(isAdmin)
   loggedInState.value = true
+}
+
+// Fehlercodes des Servers, die eine eigene, verständliche Meldung bekommen.
+// Der Server schickt zwar auch einen Text mit, der ist aber allgemein gehalten
+// („Zu viele Anfragen") und passt nicht zu jedem Formular.
+const LOGIN_FEHLERTEXTE = {
+  rate_limited: 'Zu viele Anmeldeversuche. Bitte warte kurz und versuche es dann erneut.'
 }
 
 export async function login (username, password) {
@@ -102,7 +119,12 @@ export async function login (username, password) {
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
-    throw new Error(data.error || 'Login fehlgeschlagen')
+    throw new Error(
+      LOGIN_FEHLERTEXTE[data.error] ||
+        data.message ||
+        data.error ||
+        'Login fehlgeschlagen'
+    )
   }
   setSession(data.token, data.username, data.id, data.isAdmin)
   return data
@@ -114,6 +136,11 @@ export async function login (username, password) {
  * Rueckgabe `false` heisst NICHT zwingend „abgemeldet": Bei einem
  * Netzwerkfehler bleibt die Sitzung absichtlich bestehen (offline soll niemanden
  * hinauswerfen). Ob wirklich abgemeldet wurde, sagt danach `isLoggedIn()`.
+ *
+ * Abgemeldet wird nur, wenn der Server das Token ausdruecklich ablehnt (401/403).
+ * Andere Fehler wie 502/503 kommen etwa beim naechtlichen Neustart um 04:00
+ * vor, waehrend Caddy schon antwortet, das Backend aber noch nicht. Die Sitzung
+ * ist dann nicht ungueltig, sondern ihr Zustand nur gerade unbekannt.
  */
 export async function verifyStoredToken () {
   const token = getToken()
@@ -122,10 +149,11 @@ export async function verifyStoredToken () {
     const res = await fetch(`${SERVER_URL}/api/verify`, {
       headers: { Authorization: `Bearer ${token}` }
     })
-    if (!res.ok) {
+    if (res.status === 401 || res.status === 403) {
       logout()
       return false
     }
+    if (!res.ok) return false
     // Admin-Flag / id frisch übernehmen (falls sich Ownership geändert hat).
     const data = await res.json().catch(() => ({}))
     if (data && data.id) localStorage.setItem(ID_KEY, data.id)
@@ -150,4 +178,9 @@ export function logout () {
   // Freigegebene (eingeschränkte) Versionen sind account-gebunden -> beim
   // Abmelden entfernen, damit sie für den nächsten Nutzer nicht sichtbar sind.
   clearRestrictedVersions()
+  // Dasselbe gilt für die mit dem Konto synchronisierten eigenen Versionen
+  // samt ihrer Vormerkungen: Blieben sie liegen, lud das Gerät sie beim
+  // nächsten Anmelden in das Konto, das sich dann anmeldet. Versionen nur für
+  // dieses Gerät bleiben erhalten.
+  removeSyncedCustomVersions()
 }

@@ -1,23 +1,26 @@
 <template>
   <div class="fullscreen error-404 text-center q-pa-md flex flex-center">
     <div>
-      <div style="font-size: 30vh">
+      <!-- Die große Zahl ist Schmuck, die Meldung darunter die eigentliche
+           Seitenüberschrift. Texte auf Deutsch wie der Rest der App; die
+           frühere opacity: .4 drückte den Kontrast deutlich unter 4,5:1. -->
+      <div
+        style="font-size: 30vh"
+        aria-hidden="true"
+      >
         404
       </div>
 
-      <div
-        class="text-h2"
-        style="opacity:.4"
-      >
-        Oops. Nothing here...
-      </div>
+      <h1 class="text-h2 q-my-none">
+        Seite nicht gefunden
+      </h1>
 
       <q-btn
         class="q-mt-xl"
         color="primary"
         unelevated
         to="/"
-        label="Go Home"
+        label="Zur Startseite"
         no-caps
       />
     </div>

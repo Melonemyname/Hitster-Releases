@@ -1,13 +1,59 @@
-import { app, BrowserWindow, shell, ipcMain, dialog } from 'electron'
+import { app, BrowserWindow, shell, ipcMain, dialog, powerMonitor, screen } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import log from 'electron-log'
-import { exec } from 'child_process'
+import { exec, spawn } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
+import { ensureSeeded as abgleichSeed, listFiles, METADATA_CSV, EDITIONS_JSON } from './song-seed.js'
 
 // needed in case process is undefined under Linux
 const platform = process.platform || os.platform()
+
+// ── Linux: unter Wayland über XWayland (X11) laufen ────────────────────────
+// Seit Electron 38 startet die App in einer Wayland-Sitzung nativ als
+// Wayland-Client. Wayland erlaubt einem Fenster aber nicht, sich selbst über
+// andere zu legen: setAlwaysOnTop() bleibt dort wirkungslos, und "Immer im
+// Vordergrund" ging in der AppImage nicht. Unter XWayland funktioniert es.
+//
+// Ein app.commandLine.appendSwitch('ozone-platform', 'x11') hier käme zu spät,
+// Electron wählt die Plattform, bevor dieses Skript läuft. Deshalb einmal mit
+// dem Schalter auf der echten Kommandozeile neu starten. Nur in der gepackten
+// App, im Dev-Modus würde der Neustart Quasars Prozessverwaltung aushebeln.
+// Ohne DISPLAY gibt es kein XWayland. deb/rpm bekommen den Schalter schon über
+// die .desktop-Datei (linux.executableArgs), dort greift das hier nur beim
+// Start von Hand.
+//
+// NICHT app.relaunch() benutzen (so in 1.0.5, die AppImage startete gar nicht
+// mehr): Electron startet den neuen Prozess unter Linux über einen Helfer aus
+// der eigenen Binary, und die liegt bei der AppImage im Einhängepunkt unter
+// /tmp. Den hängt die AppImage-Runtime aus, sobald dieser Prozess endet, der
+// Helfer verschwindet mit, bevor er etwas starten kann. Deshalb selbst und
+// abgekoppelt starten, bei der AppImage über die echte Datei (APPIMAGE), die
+// sich beim Start neu einhängt. spawn() meldet ein Scheitern von exec schon
+// synchron (keine pid), dann einfach unter Wayland weiterlaufen.
+if (
+  platform === 'linux' &&
+  app.isPackaged &&
+  (process.env.XDG_SESSION_TYPE === 'wayland' || process.env.WAYLAND_DISPLAY) &&
+  process.env.DISPLAY &&
+  !process.argv.some((a) => a.startsWith('--ozone-platform'))
+) {
+  try {
+    const kind = spawn(
+      process.env.APPIMAGE || process.execPath,
+      [...process.argv.slice(1), '--ozone-platform=x11'],
+      { detached: true, stdio: 'ignore' }
+    )
+    kind.on('error', () => { /* siehe pid-Prüfung */ })
+    if (kind.pid) {
+      kind.unref()
+      app.exit(0)
+    }
+  } catch (err) {
+    console.warn('[x11] Neustart fehlgeschlagen, bleibe bei Wayland:', err?.message || err)
+  }
+}
 
 // ── Persistente Datenablage über Updates hinweg ────────────────────────────
 // FRÜHER: Alle App-Daten (Cookies/LocalStorage, Fenster-Settings, Logs)
@@ -90,6 +136,64 @@ function loadWindowSettings () {
   }
 }
 
+// Ebene für "Immer im Vordergrund". Ohne Angabe nimmt Electron 'floating',
+// und alle Ebenen von 'floating' bis 'status' legt Electron unter Windows
+// direkt HINTER die Taskleiste (laut Doku, „below the taskbar on Windows").
+// Topmost bleibt das Fenster dabei nur, solange die Taskleiste selbst topmost
+// ist. Holt sich ein anderes Fenster den Vordergrund, etwa Spotify beim
+// Songstart, nimmt Windows der Taskleiste den Status zeitweise ab, und Hitster
+// rutscht mit ihr hinter Spotify. Das passt zum Springen seit 1.0.7, und
+// das Auffrischen unten konnte es mit jedem Aufruf neu auslösen, weil es
+// ebenfalls 'floating' gesetzt hat. 'screen-saver' liegt über der
+// Taskleiste und hängt nicht an ihr. Auf macOS und Linux bleibt der Standard.
+const TOPMOST_LEVEL = platform === 'win32' ? 'screen-saver' : 'floating'
+
+function applyAlwaysOnTop (on) {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (on) mainWindow.setAlwaysOnTop(true, TOPMOST_LEVEL)
+  else mainWindow.setAlwaysOnTop(false)
+}
+
+// Windows: Ein Fenster kann seinen Topmost-Status trotzdem verlieren, bekannte
+// Auslöser sind Standby, Sperren/Entsperren, Änderungen an der Anzeige und
+// Apps, die sich nachdrücklich nach vorn holen. Electron setzt den Status
+// danach nicht neu. Deshalb nach jedem Songstart, bei Fokusverlust, an den
+// genannten Stellen und einmal pro Minute neu setzen. Erst aus, dann an: Mit
+// unverändertem Wert ruft Electron Windows gar nicht erst auf. moveTop()
+// schiebt das Fenster danach an die Spitze der Topmost-Fenster.
+function reassertAlwaysOnTop () {
+  if (platform !== 'win32' || !windowSettings.alwaysOnTop) return
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isMinimized()) return
+  mainWindow.setAlwaysOnTop(false)
+  mainWindow.setAlwaysOnTop(true, TOPMOST_LEVEL)
+  mainWindow.moveTop()
+}
+
+// Windows: Spotify holt sein Fenster beim Songstart nach vorn, teils erst mit
+// Verzögerung, und nimmt Hitster dabei den Fokus. Hatte Hitster ihn vorher,
+// holen wir ihn zurück, damit Spotify im Hintergrund spielt (wie unter Linux
+// beim MPRIS-Weg). Gilt auch ohne "Immer im Vordergrund". Nur wenn der Fokus
+// noch nicht wieder bei Hitster liegt; minimiert bleibt minimiert.
+function reclaimFocus () {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isMinimized()) return
+  reassertAlwaysOnTop()
+  if (mainWindow.isFocused()) return
+  mainWindow.moveTop()
+  mainWindow.focus()
+}
+
+let topmostInterval = null
+function startTopmostWatch () {
+  if (platform !== 'win32' || topmostInterval) return
+  topmostInterval = setInterval(reassertAlwaysOnTop, 60 * 1000)
+  for (const ev of ['resume', 'unlock-screen']) {
+    powerMonitor.on(ev, () => setTimeout(reassertAlwaysOnTop, 1000))
+  }
+  for (const ev of ['display-added', 'display-removed', 'display-metrics-changed']) {
+    screen.on(ev, () => setTimeout(reassertAlwaysOnTop, 500))
+  }
+}
+
 function saveWindowSettings () {
   try {
     fs.writeFileSync(settingsPath(), JSON.stringify(windowSettings))
@@ -101,11 +205,9 @@ function saveWindowSettings () {
 // ── Songs-Ordner (bearbeitbare Song-Daten) ─────────────────────────────────
 // Die App liest Editionen, Link-Listen, Metadaten-CSV und Cover aus einem frei
 // wählbaren Ordner. Beim ersten Start wird er mit den mitgelieferten Daten (Seed)
-// gefüllt; bei Updates werden die Standard-Dateien überschrieben, während eigene
-// (custom) Editionen und deren CSV-Sektionen erhalten bleiben (siehe ensureSeeded).
-const METADATA_CSV = 'hitster-song-metadata.csv'
-const EDITIONS_JSON = 'editions.json'
-
+// gefüllt. Bei Updates bekommen nur die Standard-Dateien und CSV-Abschnitte den
+// neuen Seed, die der Nutzer nicht verändert hat; eigene Editionen und eigene
+// Änderungen bleiben erhalten (siehe song-seed.js).
 let songFolderPath = ''
 
 function songFolderConfigPath () {
@@ -141,108 +243,23 @@ function resolveSeedDirs () {
     const base = path.join(process.resourcesPath, 'song-seed')
     return { base, covers: path.join(base, 'covers') }
   }
-  const root = app.getAppPath()
+  // Im Dev-Modus (`npm run dev:electron`) zeigt app.getAppPath() auf den
+  // Build-Ordner .quasar/electron, dort liegen keine Song-Daten. Der Abgleich
+  // scheiterte dann still, und der Songs-Ordner behielt den alten Stand.
+  // Deshalb den ersten Ordner nehmen, der die Assets tatsächlich enthält.
+  const kandidaten = [app.getAppPath(), process.cwd(), path.resolve(__dirname, '..', '..')]
+  const root = kandidaten.find((dir) => fs.existsSync(path.join(dir, 'src', 'assets', 'songs'))) ||
+    app.getAppPath()
   return {
     base: path.join(root, 'src', 'assets', 'songs'),
     covers: path.join(root, 'src', 'assets', 'versions')
   }
 }
 
-function listFiles (dir, ext) {
-  try {
-    return fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith(ext))
-  } catch {
-    return []
-  }
-}
-
-function copyFileSafe (src, dest) {
-  try {
-    fs.copyFileSync(src, dest)
-  } catch (err) {
-    console.warn('[songs] Kopieren fehlgeschlagen', src, '->', dest, err?.message || err)
-  }
-}
-
-function readSeedManifest (seed) {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(path.join(seed.base, EDITIONS_JSON), 'utf-8'))
-    return Array.isArray(parsed.editions) ? parsed.editions : []
-  } catch {
-    return []
-  }
-}
-
-// CSV in Kopf + Sektionen aufteilen. Eine Sektion beginnt mit dem Muster
-// SEP / Label / SEP (drei aufeinanderfolgende Zeilen). block = kompletter Text
-// der Sektion inkl. Marker.
-function splitCsvSections (csvText) {
-  const lines = String(csvText || '').split(/\r?\n/)
-  const isSep = (s) => /^-{3,}$/.test((s || '').trim())
-  const isStart = (idx) => isSep(lines[idx]) && isSep(lines[idx + 2])
-  const header = []
-  let i = 0
-  while (i < lines.length && !isStart(i)) {
-    header.push(lines[i]); i++
-  }
-  const sections = []
-  while (i < lines.length) {
-    const label = (lines[i + 1] || '').trim()
-    let m = i + 3
-    while (m < lines.length && !isStart(m)) m++
-    sections.push({ label, block: lines.slice(i, m).join('\n') })
-    i = m
-  }
-  return { header: header.join('\n'), sections }
-}
-
-// Ordner anlegen und mit dem Seed füllen. Erststart: alles kopieren. Update:
-// Standard-Dateien überschreiben, eigene .txt/Cover unangetastet lassen, eigene
-// CSV-Sektionen (Label nicht im Standard-Manifest) aus der alten CSV in die neue
-// übernehmen. Dopplungen von Metadaten sind egal (Lookup ist global per trackId).
+// Ordner anlegen und mit dem Seed abgleichen. Die Logik steckt in song-seed.js,
+// damit sie sich ohne Electron testen lässt.
 function ensureSeeded (folder) {
-  const seed = resolveSeedDirs()
-  try {
-    fs.mkdirSync(folder, { recursive: true })
-    fs.mkdirSync(path.join(folder, 'covers'), { recursive: true })
-  } catch (err) {
-    console.warn('[songs] Ordner anlegen fehlgeschlagen:', err?.message || err)
-    return
-  }
-
-  const folderCsvPath = path.join(folder, METADATA_CSV)
-  const standardLabels = new Set(readSeedManifest(seed).map((e) => e.label))
-
-  // 1. Eigene CSV-Sektionen aus der bestehenden Folder-CSV sichern.
-  let customSectionsText = ''
-  if (fs.existsSync(folderCsvPath)) {
-    try {
-      const { sections } = splitCsvSections(fs.readFileSync(folderCsvPath, 'utf-8'))
-      const custom = sections.filter((s) => s.label && !standardLabels.has(s.label))
-      if (custom.length) customSectionsText = '\n' + custom.map((s) => s.block).join('\n') + '\n'
-    } catch (err) {
-      console.warn('[songs] Custom-Sektionen lesen fehlgeschlagen:', err?.message || err)
-    }
-  }
-
-  // 2. Standard-Dateien überschreiben (eigene .txt/.png bleiben, weil nicht im Seed).
-  for (const f of listFiles(seed.base, '.txt')) {
-    copyFileSafe(path.join(seed.base, f), path.join(folder, f))
-  }
-  for (const f of listFiles(seed.covers, '.png')) {
-    copyFileSafe(path.join(seed.covers, f), path.join(folder, 'covers', f))
-  }
-  const seedManifest = path.join(seed.base, EDITIONS_JSON)
-  if (fs.existsSync(seedManifest)) copyFileSafe(seedManifest, path.join(folder, EDITIONS_JSON))
-
-  // 3. Neue Standard-CSV schreiben und die gesicherten Custom-Sektionen anhängen.
-  try {
-    let baseCsv = fs.readFileSync(path.join(seed.base, METADATA_CSV), 'utf-8')
-    if (customSectionsText) baseCsv = baseCsv.replace(/\s*$/, '\n') + customSectionsText
-    fs.writeFileSync(folderCsvPath, baseCsv)
-  } catch (err) {
-    console.warn('[songs] CSV schreiben fehlgeschlagen:', err?.message || err)
-  }
+  abgleichSeed(folder, resolveSeedDirs(), { appVersion: app.getVersion(), log })
 }
 
 // Aus einer .txt ohne Manifest-Eintrag eine Edition ableiten (dynamische Erkennung).
@@ -304,7 +321,15 @@ function readSongData () {
   return result
 }
 
+// Letzter Update-Status für den Renderer. Liegt das Update schon fertig im
+// Cache (beim Start davor heruntergeladen), feuert `update-downloaded` kurz
+// nach dem Start, oft bevor die Oberfläche geladen ist und zuhört. Dann ging
+// die Meldung verloren und die Installationsaufforderung kam nie. Der
+// Renderer fragt diesen Stand deshalb beim Einhängen zusätzlich ab.
+let lastUpdateEvent = null
+
 function sendUpdateEvent (data) {
+  if (data?.status !== 'checking') lastUpdateEvent = data
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('hitster:updateEvent', data)
   }
@@ -319,13 +344,23 @@ function createWindow () {
     width: 1000,
     height: 600,
     useContentSize: true,
-    alwaysOnTop: windowSettings.alwaysOnTop,
     webPreferences: {
       contextIsolation: true,
+      // Nicht drosseln, wenn das Fenster verdeckt oder minimiert ist. Unter
+      // Windows liegt Spotify beim Spielen oft vor Hitster, Chromium erkennt
+      // das Fenster dann als verdeckt, bremst Timer und Verbindung und nach
+      // 5 Minuten noch stärker. Beobachtet: ein Windows-Spieler flog etwa
+      // alle 5 Minuten aus dem Raum, unter Linux (keine Verdeckungs-
+      // erkennung) blieb die Verbindung stabil.
+      backgroundThrottling: false,
       // More info: https://v2.quasar.dev/quasar-cli-vite/developing-electron-apps/electron-preload-script
       preload: path.resolve(__dirname, process.env.QUASAR_ELECTRON_PRELOAD)
     }
   })
+
+  // Erst nach dem Anlegen setzen: Die Option `alwaysOnTop` im Konstruktor
+  // kennt keine Ebene und landete unter Windows hinter der Taskleiste.
+  applyAlwaysOnTop(windowSettings.alwaysOnTop)
 
   mainWindow.loadURL(process.env.APP_URL)
 
@@ -348,6 +383,12 @@ function createWindow () {
   // dem Menü zugänglich lassen – für Debugging von Multiplayer-Events,
   // Server-Verbindung usw. Ohne diesen Zugriff kann der Nutzer keine
   // Console-Logs mehr melden, wenn etwas schiefgeht.
+
+  // Windows: nach dem Wiederherstellen und wenn ein anderes Fenster den Fokus
+  // nimmt (etwa Spotify beim Songwechsel), den Topmost-Status auffrischen.
+  mainWindow.on('restore', reassertAlwaysOnTop)
+  mainWindow.on('blur', () => setTimeout(reassertAlwaysOnTop, 300))
+  startTopmostWatch()
 
   mainWindow.on('closed', () => {
     mainWindow = null
@@ -373,7 +414,10 @@ ipcMain.handle('hitster:openSong', async (_e, url) => {
   // Track-ID ist per Regex auf [A-Za-z0-9] beschränkt -> sicher fürs Einsetzen
   // in den AppleScript-/URI-String (keine Shell-Sonderzeichen möglich).
   const id = m ? m[1] : ''
-  const httpsUrl = /^https?:\/\//i.test(s)
+  // Nur Spotify-Links gehen an den Browser. Song-Links kommen auch vom Host
+  // eines Raums (geteilte Versionen), eine beliebige Adresse soll so nicht
+  // auf allen Rechnern der Gäste aufgehen.
+  const httpsUrl = /^https:\/\/open\.spotify\.com\//i.test(s)
     ? s
     : id
       ? `https://open.spotify.com/track/${id}`
@@ -398,14 +442,34 @@ ipcMain.handle('hitster:openSong', async (_e, url) => {
     }
   } else if (id && platform === 'linux') {
     // Linux: MPRIS/D-Bus -> Track laden (OpenUri) und Wiedergabe erzwingen (Play).
+    // --print-reply ist nötig: Ohne wartet dbus-send nicht auf die Antwort und
+    // endet auch dann mit 0, wenn Spotify gar nicht läuft (der Bus antwortet
+    // dann mit ServiceUnknown, das sieht aber niemand). So kam der Rückfall
+    // auf spotify:track: bzw. den Browser unten nie zum Zug. Mit Antwort endet
+    // dbus-send bei einem Fehler mit 1. Die Zeitgrenze verhindert, dass ein
+    // hängender Client den Songstart blockiert (Standard wären 25 Sekunden).
     const base =
-      'dbus-send --type=method_call --dest=org.mpris.MediaPlayer2.spotify ' +
+      'dbus-send --print-reply --reply-timeout=2000 --type=method_call ' +
+      '--dest=org.mpris.MediaPlayer2.spotify ' +
       '/org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player'
-    if (
-      await run(
-        `${base}.OpenUri string:'spotify:track:${id}' && sleep 0.4 && ${base}.Play`
-      )
-    ) {
+    // Aktuelle Spotify-Versionen (etwa das Flatpak 1.2.95) holen ihr Fenster
+    // beim OpenUri nach vorn. Hatte Hitster vorher den Fokus, holen wir ihn
+    // danach zurück, damit Spotify im Hintergrund weiterspielt.
+    const hatteFokus = !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused())
+    // Über den Rückfall entscheidet nur OpenUri: Ist der Track geladen, darf
+    // ein gescheitertes Play nicht noch einmal per spotify:-Link öffnen. Play
+    // kommt danach, sonst setzt es den alten Track fort.
+    if (await run(`${base}.OpenUri string:'spotify:track:${id}'`)) {
+      await new Promise((resolve) => setTimeout(resolve, 400))
+      await run(`${base}.Play`)
+      if (hatteFokus) {
+        setTimeout(() => {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.moveTop()
+            mainWindow.focus()
+          }
+        }, 600)
+      }
       return { via: 'linux-mpris' }
     }
   } else if (id && platform === 'win32') {
@@ -446,6 +510,43 @@ ipcMain.handle('hitster:openSong', async (_e, url) => {
     // alten Track resumte). Mit dem Autoplay-Redirect entfällt der
     // gesamte PowerShell-Umweg – der Track-Load ist damit auch
     // spürbar schneller.
+    //
+    // 1.0.5: Der Weblink hing davon ab, dass Windows `open.spotify.com` an
+    // die Spotify-App weiterreicht (Einstellungen → Apps → Apps für
+    // Websites). Ist das aus, etwa nach einer Neuinstallation von Spotify,
+    // landete jeder Song im Browser. Deshalb jetzt zuerst direkt das
+    // Protokoll: `spotify:track:XXX?autoplay=true` lädt den Track UND
+    // startet ihn, auch wenn Spotify schon läuft und vorher ein anderer
+    // Song lief. Der Weblink bleibt nur noch für den Fall, dass kein
+    // Programm `spotify:` übernimmt.
+    //
+    // 1.0.7: In 1.0.5/1.0.6 stand hier der Zusatz `:play`. Der startet unter
+    // Linux, die Windows-App lädt damit aber nur den Song, der alte spielt
+    // weiter. Auf einem Windows-11-PC mit Spotify-Desktop (nicht Store)
+    // durchprobiert: `?autoplay=true` am spotify:-Link spielt ab, ebenso der
+    // Weblink mit `?autoplay=true` per --protocol-uri. `?play=true` und
+    // `:play` laden nur, Spotify.exe mit dem Weblink ohne --protocol-uri
+    // holt nur das Fenster nach vorn.
+    let spotifyApp = ''
+    try {
+      spotifyApp = app.getApplicationNameForProtocol('spotify://')
+    } catch {
+      // Abfrage nicht möglich -> wie ohne App behandeln.
+    }
+    // Fokus vor dem Öffnen merken, Spotify nimmt ihn gleich weg.
+    const hatteFokus = !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused())
+    const nachSpotify = hatteFokus ? reclaimFocus : reassertAlwaysOnTop
+    if (spotifyApp) {
+      try {
+        await shell.openExternal(`spotify:track:${id}?autoplay=true`)
+        // Spotify holt sich beim Öffnen nach vorn, teils mit Verzögerung.
+        setTimeout(nachSpotify, 800)
+        setTimeout(nachSpotify, 2500)
+        return { via: 'win-protocol' }
+      } catch {
+        // Weiter mit dem Weblink.
+      }
+    }
     try {
       // `https://open.spotify.com/track/XXX?autoplay=true` – Spotify
       // hat sich für `open.spotify.com` als Handler registriert. Der
@@ -455,6 +556,8 @@ ipcMain.handle('hitster:openSong', async (_e, url) => {
       await shell.openExternal(
         `https://open.spotify.com/track/${id}?autoplay=true`
       )
+      setTimeout(nachSpotify, 800)
+      setTimeout(nachSpotify, 2500)
       return { via: 'win-uri' }
     } catch {
       // Fallback unten
@@ -487,7 +590,7 @@ ipcMain.handle('hitster:getAlwaysOnTop', () => {
 ipcMain.handle('hitster:setAlwaysOnTop', (_e, value) => {
   const on = !!value
   windowSettings.alwaysOnTop = on
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setAlwaysOnTop(on)
+  applyAlwaysOnTop(on)
   saveWindowSettings()
   return on
 })
@@ -521,6 +624,9 @@ ipcMain.handle('hitster:setSongFolder', (_e, newPath) => {
   return { ok: true, path: songFolderPath }
 })
 
+// Letzter Update-Status (siehe lastUpdateEvent).
+ipcMain.handle('hitster:getUpdateStatus', () => lastUpdateEvent)
+
 // Update sofort installieren (Renderer triggert nach `downloaded`-Event).
 // Ohne diesen expliziten Aufruf startet Windows den NSIS-Installer manchmal
 // nicht automatisch beim regulären Quit – dann sieht der Nutzer nur die
@@ -535,6 +641,14 @@ ipcMain.handle('hitster:installUpdate', () => {
     log.error('[auto-update] quitAndInstall Fehler:', err)
     return { ok: false, message: String(err?.message || err) }
   }
+})
+
+// „Beenden" aus dem Hauptmenü. app.quit() statt nur das Fenster zu schließen:
+// Unter macOS liefe die App sonst ohne Fenster im Dock weiter, und der Knopf
+// täte für den Nutzer scheinbar nichts.
+ipcMain.handle('hitster:quit', () => {
+  app.quit()
+  return { ok: true }
 })
 
 // Manueller Update-Check entfernt: er funktionierte nicht zuverlässig (Timeout

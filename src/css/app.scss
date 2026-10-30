@@ -16,24 +16,49 @@ $positive: #21ba45;
 $cyan: #00bcd4;
 
 :root {
-  --q-primary: #00bcd4;
-  --q-secondary: #26c6da;
-  --q-accent: #00acc1;
+  --q-primary: #47c1d1;
+  --q-secondary: #68ccd9;
+  --q-accent: #47c1d1;
   --q-positive: #21ba45 !important;
 
   /* Theme-Variablen (werden von useTheme.js zur Laufzeit überschrieben).
-     Defaults = bisheriger Look, damit ohne Theme-Auswahl alles gleich bleibt. */
+     Defaults = abgeleitete Werte des Standard-Themes (Onyx), damit schon vor
+     dem ersten applyToDom alles lesbar ist (vorher Weiß auf #00bcd4, 2,3:1). */
   --app-bg: #121212;
   --app-on-bg: #f5f5f5;
-  --app-accent: #00bcd4;
-  --app-accent-hover: #26c6da;
-  --app-on-accent: #ffffff;
+  --app-accent: #47c1d1;
+  --app-accent-hover: #70cfdb;
+  --app-on-accent: #141414;
+
+  /* Barrierefreiheit (WCAG 2.1 AA, berechnet in themeColors.js):
+     --app-accent-text: Akzent als Text-/Iconfarbe auf Flächen (>= 4,5:1).
+     --app-on-surface: Schrift auf allen dunklen Acryl-Flächen.
+     --app-on-surface-muted: gedämpfte Schrift für Nebentexte auf Flächen,
+       ebenfalls >= 4,5:1 auf jeder Fläche (statt opacity oder text-grey-*).
+     --app-on-bg-halo: text-shadow für Text direkt auf dem Hintergrund; nur bei
+       Verläufen gesetzt, auf denen keine Schriftfarbe überall 4,5:1 schafft.
+     --app-surface-solid: deckender Grundton der Flächen (für color-mix). */
+  --app-accent-text: #47c1d1;
+  --app-on-surface: #f5f5f5;
+  --app-on-surface-muted: #bdbdbd;
+  --app-on-bg-halo: none;
+  --app-surface-solid: rgb(20, 20, 24);
+  /* Semantische Farben: Füllungen bleiben (Erfolg #21ba45, Fehler rot),
+     --app-on-positive ist die Schrift auf Grün (Weiß nur 2,6:1, dunkel 7,2:1),
+     die *-text-Varianten sind Erfolg/Fehler/Warnung als Textfarbe auf
+     Flächen (je Theme nötigenfalls aufgehellt, >= 4,5:1). */
+  --app-on-positive: #141414;
+  --app-positive-text: #21ba45;
+  --app-negative-text: #ff3c52;
+  --app-warning-text: #f2c037;
 
   /* Acrylic-/Mica-artige Flächen: leicht durchscheinend + Weichzeichner,
      damit die Theme-Farben auch hinter Karten/Containern sichtbar bleiben.
      Bewusst dunkel getönt, damit heller Text auf jedem Theme lesbar bleibt.
      --surface-bg-weak: für verschachtelte Flächen (Karte auf Karte), damit der
      Effekt dort nicht doppelt/zu trüb stapelt. */
+  /* Deckkraft 0.72; über sehr hellen Hintergründen hebt useTheme.js sie je
+     Theme bis höchstens 0.86 an, damit Schrift auf der Fläche lesbar bleibt. */
   --surface-bg: rgba(20, 20, 24, 0.72);
   --surface-bg-weak: rgba(255, 255, 255, 0.05);
   --surface-border: rgba(255, 255, 255, 0.08);
@@ -61,6 +86,113 @@ $cyan: #00bcd4;
    On-Background-Farbe. */
 .q-page {
   color: var(--app-on-bg, #f5f5f5);
+  /* Halo nur bei Verläufen, auf denen die Schrift nicht überall 4,5:1 schafft
+     (sonst `none`). Wird vererbt, deshalb unten auf allen Flächen und
+     gefüllten Elementen wieder abgeschaltet. */
+  text-shadow: var(--app-on-bg-halo, none);
+}
+
+/* Auf Flächen und gefüllten Elementen hat der Halo nichts zu suchen: Dort
+   liegt die Schrift auf einem bekannten Untergrund mit ausreichend Kontrast. */
+.q-card,
+.q-menu,
+.q-dialog,
+.q-banner,
+.q-btn,
+.q-chip,
+.q-badge,
+.q-field,
+.q-tooltip,
+.q-notification,
+.q-stepper,
+.text-on-surface {
+  text-shadow: none;
+}
+
+/* ── Hilfsklassen für Barrierefreiheit ───────────────────────────────────
+   .text-on-surface: Schrift auf dunklen Acryl-Flächen (schaltet den Halo ab).
+   .text-muted: gedämpfte Nebentexte auf Flächen, Ersatz für text-grey-5..9
+     und für opacity-Abschwächungen (beides fällt unter 4,5:1).
+   .sr-only: nur für Screenreader sichtbar. */
+.text-on-surface {
+  color: var(--app-on-surface) !important;
+}
+.text-muted {
+  color: var(--app-on-surface-muted) !important;
+}
+.sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+/* ── Akzent als Text-/Iconfarbe ──────────────────────────────────────────
+   Der Akzent selbst ist auf Füllung und Beschriftung (--app-on-accent)
+   abgestimmt und als Schrift auf den dunklen Flächen oft zu dunkel. Überall,
+   wo Quasar die Markenfarbe als Text, Icon oder Linie einsetzt, gilt deshalb
+   die aufgehellte Variante --app-accent-text. Gefüllte Knöpfe, Chips und
+   Badges setzen ihre Farben weiter unten ausdrücklich und gewinnen über die
+   Reihenfolge. */
+.text-primary,
+.text-secondary,
+.text-accent {
+  color: var(--app-accent-text) !important;
+}
+/* Dasselbe für Erfolg/Fehler/Warnung als Text oder Icon auf Flächen (etwa
+   Hinweiszeilen oder Fehlermeldungen unter Feldern). Das Quasar-Rot erreichte
+   auf den dunklen Flächen nirgends 4,5:1. Gefüllte rote Knöpfe/Chips/Badges
+   mit `text-negative` setzen weiter unten Füllung und weiße Schrift. */
+.text-positive {
+  color: var(--app-positive-text) !important;
+}
+.text-negative,
+.q-field--error .q-field__bottom,
+.q-stepper__tab--error {
+  color: var(--app-negative-text) !important;
+}
+.text-warning {
+  color: var(--app-warning-text) !important;
+}
+.q-checkbox__inner--truthy,
+.q-checkbox__inner--indet,
+.q-checkbox--dark .q-checkbox__inner--truthy,
+.q-checkbox--dark .q-checkbox__inner--indet,
+.q-radio__inner--truthy,
+.q-radio--dark .q-radio__inner--truthy,
+.q-toggle__inner--truthy,
+.q-toggle--dark .q-toggle__inner--truthy,
+.q-field__control,
+.q-item--active,
+.q-item.q-router-link--active,
+.q-linear-progress,
+.q-slider__track,
+.q-slider__thumb {
+  color: var(--app-accent-text);
+}
+/* Sprechblase am Slider-Daumen (label / label-always, etwa „Bingos zum
+   Sieg"): Quasar füllt Pin und Textcontainer mit currentColor, erbt die Farbe
+   also vom Daumen, und setzt die Zahl fest in Weiß. Mit der hellen
+   --app-accent-text als Daumenfarbe stand Weiß auf hellem Grund. Die Blase
+   bekommt deshalb die Akzent-Füllung und die Zahl die dazu passende
+   Beschriftung (--app-on-accent, ≥ 4,5:1). Spur und Daumen bleiben hell,
+   damit sie auf der dunklen Fläche sichtbar sind. Die doppelte Klasse samt
+   !important schlägt auch label-color/label-text-color, die Quasar als
+   text-*-Klassen setzt (und die oben ebenfalls !important tragen). */
+.q-slider .q-slider__pin {
+  color: var(--app-accent) !important;
+}
+.q-slider .q-slider__text {
+  color: var(--app-on-accent) !important;
+}
+/* Häkchen auf der hellen Checkbox-Füllung: dunkel statt Weiß. */
+.q-checkbox__svg {
+  color: var(--app-surface-solid);
 }
 
 /* ── Einheitliche Buttons ────────────────────────────────────────────────
@@ -119,6 +251,22 @@ $cyan: #00bcd4;
 .q-btn--rectangle.text-negative .q-icon {
   color: #fff !important;
 }
+/* Erfolg bleibt grün (#21ba45, Projektvorgabe), auch auf rechteckigen
+   Knöpfen, die sonst den Akzent bekommen. Auf dem Grün hat Weiß nur 2,6:1,
+   deshalb dunkle Schrift (--app-on-positive, 7,2:1). Gilt für runde und
+   rechteckige Knöpfe; deaktivierte Knöpfe regelt der Block weiter unten. */
+.q-btn.bg-positive {
+  background: var(--q-positive) !important;
+  color: var(--app-on-positive) !important;
+}
+.q-btn.bg-positive .q-btn__content,
+.q-btn.bg-positive .q-icon {
+  color: var(--app-on-positive) !important;
+}
+/* Hover hellt auf: dunkle Schrift wird dadurch nur kontrastreicher. */
+.q-btn.bg-positive:not(.disabled):not(.q-btn--disable):not([disabled]):hover {
+  background: color-mix(in srgb, var(--q-positive) 85%, var(--app-on-surface)) !important;
+}
 /* Runde Icon-/FAB-Buttons mit Marken-Hintergrund: Icon folgt On-Accent. */
 .q-btn.bg-primary,
 .q-btn.bg-secondary,
@@ -131,63 +279,64 @@ $cyan: #00bcd4;
    und theme-farbig bleiben. Der ausgewählte Button (voller Akzent)
    hebt sich weiterhin deutlich ab. */
 .q-btn.btn-unselected {
-  background: color-mix(in srgb, var(--app-accent) 30%, transparent) !important;
-  color: var(--app-on-accent) !important;
-  border: 1px solid color-mix(in srgb, var(--app-on-accent) 45%, transparent) !important;
+  /* Barrierefreiheit (WCAG 1.4.3): Vorher lag --app-on-accent (bei
+     hellen Akzenten dunkel) auf einer halbtransparenten Akzent-Tönung über
+     der dunklen Fläche, das ergab bis 1,8:1. Jetzt deckende, nur leicht
+     getönte Fläche mit heller Flächenschrift (≥ 7:1) und Rahmen in der
+     Akzent-Textfarbe, damit „nicht gewählt" auch ohne Farbe erkennbar ist. */
+  background: color-mix(in srgb, var(--app-accent) 18%, var(--app-surface-solid)) !important;
+  color: var(--app-on-surface) !important;
+  border: 1px solid var(--app-accent-text) !important;
 }
 .q-btn.btn-unselected .q-btn__content,
 .q-btn.btn-unselected .q-icon {
-  color: var(--app-on-accent) !important;
+  color: var(--app-on-surface) !important;
 }
 .q-btn.btn-unselected:hover {
-  background: color-mix(in srgb, var(--app-accent) 55%, transparent) !important;
-  border-color: color-mix(in srgb, var(--app-on-accent) 70%, transparent) !important;
+  background: color-mix(in srgb, var(--app-accent) 32%, var(--app-surface-solid)) !important;
 }
 
-/* ── Deaktivierte Buttons: theme-neutral & klar erkennbar ─────────────────
-   Quasar setzt für deaktivierte Buttons `opacity: 0.6` (via `.q-btn--disable`
-   bzw. das native `disabled`-Attribut). Zusammen mit der Accent-Füllung wird
-   das auf vielen Themes zu dunkel / farb-nah, sodass der Button „verschwindet".
-   Lösung: der Button behält eine dezente Theme-Akzent-Tönung (statt farblos
-   grau) und die Schrift kommt über `--app-on-accent`, die per Definition auf
-   dem Akzent lesbar ist. Zusätzlich desaturiert + gestrichelter Rand, damit
-   der Button klar als „nicht klickbar" erkennbar bleibt. */
-.q-btn--rectangle.q-btn--disable,
+/* ── Deaktivierte Buttons: deckend, ruhig und klar erkennbar ─────────────
+   Quasar dimmt deaktivierte Knöpfe per `opacity: 0.6` (Klasse `.disabled`
+   bzw. natives `disabled`-Attribut), auf vielen Themes „verschwanden" sie
+   damit. Früher lag hier eine halbtransparente Akzent-Tönung mit
+   --app-on-accent als Schrift. Das passte nur, solange die Beschriftung des
+   Akzents hell ist: Bei Themes mit dunkler Akzent-Schrift (etwa Graphite)
+   stand dunkle Schrift auf dunkler Fläche, zum Beispiel bei „Abgeben" im
+   Bingo, solange das Feld leer ist. Jetzt gilt dasselbe Muster wie für
+   deaktivierte Toggle-Optionen: deckende, nur leicht akzentgetönte dunkle
+   Fläche, Schrift und Icon in der gedämpften Flächenschrift
+   (--app-on-surface-muted, ≥ 4,6:1) ohne zusätzliche opacity, dazu ein
+   gestrichelter Rand als Zeichen für „nicht klickbar". Das gilt auch für
+   deaktivierte rote und grüne Knöpfe: Deren Regeln weiter oben haben dieselbe
+   Spezifität, diese hier gewinnen über die Reihenfolge (auch gegen die
+   Hover-Regel der Rechteck-Knöpfe). `.q-btn--disable` setzt Quasar 2 nicht
+   mehr, die Klasse bleibt nur zur Sicherheit in der Liste. */
+.q-btn--rectangle.disabled,
 .q-btn--rectangle[disabled],
-.q-btn--rectangle.disabled {
-  background: color-mix(in srgb, var(--app-accent) 32%, transparent) !important;
-  color: var(--app-on-accent) !important;
-  border: 2px dashed color-mix(in srgb, var(--app-on-accent) 60%, transparent) !important;
+.q-btn--rectangle.q-btn--disable {
+  background: color-mix(in srgb, var(--app-accent) 14%, var(--app-surface-solid)) !important;
+  color: var(--app-on-surface-muted) !important;
+  border: 2px dashed var(--app-on-surface-muted) !important;
   opacity: 1 !important;
   filter: saturate(0.55);
   cursor: not-allowed !important;
 }
-.q-btn--rectangle.q-btn--disable .q-btn__content,
-.q-btn--rectangle.q-btn--disable .q-icon,
+.q-btn--rectangle.disabled .q-btn__content,
+.q-btn--rectangle.disabled .q-icon,
 .q-btn--rectangle[disabled] .q-btn__content,
 .q-btn--rectangle[disabled] .q-icon,
-.q-btn--rectangle.disabled .q-btn__content,
-.q-btn--rectangle.disabled .q-icon {
-  color: var(--app-on-accent) !important;
-  opacity: 0.9;
-}
-/* Deaktivierte Chips/Buttons in Segment-Toggles konsistent behandeln (der
-   Toggle rendert die inaktiven Optionen weiterhin, aber wenn eine ganze
-   Option `disable`-Flag hat, soll sie erkennbar bleiben). */
-.q-btn-group > .q-btn.q-btn--disable,
-.q-btn-group > .q-btn[disabled] {
-  background: color-mix(in srgb, var(--app-accent) 32%, transparent) !important;
-  color: var(--app-on-accent) !important;
-  border: 2px dashed color-mix(in srgb, var(--app-on-accent) 60%, transparent) !important;
-  opacity: 1 !important;
-  filter: saturate(0.55);
-  cursor: not-allowed !important;
+.q-btn--rectangle.q-btn--disable .q-btn__content,
+.q-btn--rectangle.q-btn--disable .q-icon {
+  color: var(--app-on-surface-muted) !important;
 }
 
 /* Flat/Outline-Buttons mit color="grey*" (Abbrechen/Schließen) sollen die
    Theme-Text-Farbe verwenden, statt eines fest-grauen Textes der bei
    hellen Themes fast unsichtbar wird. Nur Text-Farbe – Hintergrund bleibt
-   transparent. */
+   transparent. Betroffen sind praktisch nur runde Icon-Knöpfe (rechteckige
+   sind gefüllt, siehe oben), und die sitzen auf Flächen: deshalb die
+   Flächen-Schrift, ohne Abschwächung per opacity (fiel unter 4,5:1). */
 .q-btn.q-btn--flat.text-grey,
 .q-btn.q-btn--flat.text-grey-6,
 .q-btn.q-btn--flat.text-grey-7,
@@ -196,8 +345,7 @@ $cyan: #00bcd4;
 .q-btn.q-btn--outline.text-grey-6,
 .q-btn.q-btn--outline.text-grey-7,
 .q-btn.q-btn--outline.text-grey-8 {
-  color: var(--app-on-bg) !important;
-  opacity: 0.85;
+  color: var(--app-on-surface) !important;
 }
 
 /* Segment-Toggles (q-btn-toggle): Abstand + klare Auswahl (überschreibt die
@@ -214,22 +362,60 @@ $cyan: #00bcd4;
   color: var(--app-on-accent) !important;
 }
 /* Nicht-ausgewählte Toggle-Optionen (z. B. Modus-Auswahl neben „Normal"):
-   dezenter Theme-Akzent als Füllung + Schrift über `--app-on-accent`. Damit
-   sieht die inaktive Option wie eine dezentere Version der aktiven aus,
-   erbt die Theme-Farbe (nicht farblos grau) und der Text ist auf jedem
-   Theme lesbar. */
+   dezent akzentgetönte, deckende Fläche mit heller Flächenschrift und Rand in
+   der Akzent-Textfarbe. Vorher stand --app-on-accent (bei hellen Akzenten
+   dunkel) auf halbtransparentem Akzent über der dunklen Fläche, das ergab im
+   Audit 1,5 bis 2,2:1 (WCAG 1.4.3). Gleiches Muster wie .btn-unselected. */
 .q-btn-group > .q-btn[aria-pressed="false"] {
-  background: color-mix(in srgb, var(--app-accent) 30%, transparent) !important;
-  color: var(--app-on-accent) !important;
-  border: 1px solid color-mix(in srgb, var(--app-on-accent) 45%, transparent) !important;
+  background: color-mix(in srgb, var(--app-accent) 18%, var(--app-surface-solid)) !important;
+  color: var(--app-on-surface) !important;
+  border: 1px solid var(--app-accent-text) !important;
 }
 .q-btn-group > .q-btn[aria-pressed="false"] .q-btn__content,
 .q-btn-group > .q-btn[aria-pressed="false"] .q-icon {
-  color: var(--app-on-accent) !important;
+  color: var(--app-on-surface) !important;
 }
 .q-btn-group > .q-btn[aria-pressed="false"]:hover {
-  background: color-mix(in srgb, var(--app-accent) 55%, transparent) !important;
-  border-color: color-mix(in srgb, var(--app-on-accent) 70%, transparent) !important;
+  background: color-mix(in srgb, var(--app-accent) 32%, var(--app-surface-solid)) !important;
+}
+/* Deaktivierte Toggle-Optionen (ganzer Toggle per `disable`, etwa für
+   Mitspieler ohne Host-Rechte). Die Regeln stehen bewusst hinter denen für
+   aria-pressed: Bei gleicher Spezifität gewannen vorher die Auswahl-Regeln,
+   der Disabled-Look kam nur halb an. Nicht gewählte Optionen sehen aus wie
+   deaktivierte Rechteck-Knöpfe (auch beim Überfahren, deshalb die
+   :hover-Varianten gegen die Hover-Regel oben). Die gewählte Option behält
+   ihre Akzent-Füllung samt --app-on-accent, damit die Auswahl lesbar bleibt,
+   und zeigt nur den gestrichelten Rand. Ohne Sättigungsfilter, der würde den
+   abgestimmten Kontrast von Füllung und Schrift verschieben. */
+.q-btn-group > .q-btn.disabled,
+.q-btn-group > .q-btn.disabled:hover,
+.q-btn-group > .q-btn[disabled],
+.q-btn-group > .q-btn[disabled]:hover {
+  background: color-mix(in srgb, var(--app-accent) 14%, var(--app-surface-solid)) !important;
+  color: var(--app-on-surface-muted) !important;
+  border: 2px dashed var(--app-on-surface-muted) !important;
+  opacity: 1 !important;
+  filter: saturate(0.55);
+  cursor: not-allowed !important;
+}
+.q-btn-group > .q-btn.disabled .q-btn__content,
+.q-btn-group > .q-btn.disabled .q-icon,
+.q-btn-group > .q-btn[disabled] .q-btn__content,
+.q-btn-group > .q-btn[disabled] .q-icon {
+  color: var(--app-on-surface-muted) !important;
+}
+.q-btn-group > .q-btn.disabled[aria-pressed="true"],
+.q-btn-group > .q-btn[disabled][aria-pressed="true"] {
+  background: var(--app-accent) !important;
+  color: var(--app-on-accent) !important;
+  border: 2px dashed color-mix(in srgb, var(--app-on-accent) 60%, transparent) !important;
+  filter: none;
+}
+.q-btn-group > .q-btn.disabled[aria-pressed="true"] .q-btn__content,
+.q-btn-group > .q-btn.disabled[aria-pressed="true"] .q-icon,
+.q-btn-group > .q-btn[disabled][aria-pressed="true"] .q-btn__content,
+.q-btn-group > .q-btn[disabled][aria-pressed="true"] .q-icon {
+  color: var(--app-on-accent) !important;
 }
 
 /* Abstand zwischen benachbarten Buttons (Stepper-Navigation, Dialog-Aktionen). */
@@ -249,12 +435,22 @@ $cyan: #00bcd4;
   background: var(--q-negative) !important;
   color: #fff !important;
 }
+/* Erfolgs-Chips (Antwortzähler, Bingos, Rate-Ergebnis) bleiben grün, mit
+   dunkler Schrift wie die Erfolgs-Knöpfe. */
+.q-chip.bg-positive {
+  background: var(--q-positive) !important;
+  color: var(--app-on-positive) !important;
+}
+.q-chip.bg-positive .q-chip__content,
+.q-chip.bg-positive .q-icon {
+  color: var(--app-on-positive) !important;
+}
 /* Chips setzen ihre Textfarbe oft per Utility-Class `text-white` (die
    überschreibt sonst unser Theme-Textfeld und wird bei hellen Themes
    unlesbar). Explizit über die Chip-Struktur die On-Accent-Farbe erzwingen
-   – gilt NICHT für negative (rot). */
-.q-chip:not(.bg-negative):not(.text-negative) .q-chip__content,
-.q-chip:not(.bg-negative):not(.text-negative) .q-icon {
+   – gilt NICHT für negative (rot) und positive (grün). */
+.q-chip:not(.bg-negative):not(.text-negative):not(.bg-positive) .q-chip__content,
+.q-chip:not(.bg-negative):not(.text-negative):not(.bg-positive) .q-icon {
   color: var(--app-on-accent) !important;
 }
 
@@ -264,6 +460,14 @@ $cyan: #00bcd4;
 .q-card__section.bg-secondary,
 .q-card__section.bg-accent {
   color: var(--app-on-accent) !important;
+}
+/* Grüne Köpfe (z. B. „Sieg!") mit dunkler Schrift, siehe --app-on-positive.
+   Allgemein gilt für grüne Füllungen dieselbe Schrift. */
+.bg-positive {
+  color: var(--app-on-positive);
+}
+.q-card__section.bg-positive {
+  color: var(--app-on-positive) !important;
 }
 
 /* ── Badges wie Chips vereinheitlichen (Theme-Akzent + On-Accent, negative rot). */
@@ -276,11 +480,17 @@ $cyan: #00bcd4;
   background: var(--q-negative) !important;
   color: #fff !important;
 }
+.q-badge.bg-positive {
+  background: var(--q-positive) !important;
+  color: var(--app-on-positive) !important;
+}
 
-/* ── Banner: durchscheinende Surface-Fläche statt fixem Grau. */
+/* ── Banner: durchscheinende Surface-Fläche statt fixem Grau. Die Fläche ist
+   immer dunkel, also helle Flächen-Schrift (vorher --app-on-bg, auf hellen
+   Themes dunkel auf dunkel). */
 .q-banner {
   background: var(--surface-bg) !important;
-  color: var(--app-on-bg) !important;
+  color: var(--app-on-surface) !important;
 }
 
 /* ── Aktiver/ausgewählter Listeneintrag (z.B. Slot-Auswahl) im Theme-Akzent. */
@@ -301,7 +511,7 @@ $cyan: #00bcd4;
 /* Karten & Stepper: durchscheinende Acrylic-Fläche statt voll-opakem Dark.
    Heller Text bleibt (dunkle Tönung sorgt für Kontrast auch bei hellen Themes). */
 .q-card {
-  color: #fff;
+  color: var(--app-on-surface);
   background-color: var(--surface-bg) !important;
   backdrop-filter: blur(var(--surface-blur)) saturate(150%);
   -webkit-backdrop-filter: blur(var(--surface-blur)) saturate(150%);
@@ -315,7 +525,7 @@ $cyan: #00bcd4;
 .q-stepper__content,
 .q-stepper__step-inner,
 .q-stepper__tab {
-  color: #fff;
+  color: var(--app-on-surface);
   background: transparent !important;
   box-shadow: none;
 }
@@ -323,6 +533,8 @@ $cyan: #00bcd4;
 /* Popups/Menüs (FAB-Menü, Select-/Dropdown-Popups) bekommen denselben
    Acryl-Look wie Karten, statt der voll-opaken Dark-Mode-Fläche. */
 .q-menu {
+  /* Teleportiert an <body>, erbt also nichts von der Seite: Schrift ausdrücklich. */
+  color: var(--app-on-surface);
   background-color: var(--surface-bg) !important;
   backdrop-filter: blur(var(--surface-blur)) saturate(150%);
   -webkit-backdrop-filter: blur(var(--surface-blur)) saturate(150%);
@@ -332,6 +544,32 @@ $cyan: #00bcd4;
 .q-menu .q-list,
 .q-menu .q-item {
   background: transparent !important;
+}
+
+/* ── Versions-Chips (ausgewählte Versionen in Lobby und lokalem Start) ─────
+   Klein, mit Icon und Namen. Liegen immer auf einer (dunklen) Fläche, daher
+   Schrift in --app-on-surface. */
+.active-pools-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.pool-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  padding: 3px 10px 3px 5px;
+}
+.pool-chip-icon {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+.pool-chip-name {
+  font-size: 0.73rem;
+  color: var(--app-on-surface);
 }
 
 /* ── Versionsauswahl-Karten (Index + Lobby, EINE zentrale Definition) ──────
@@ -523,5 +761,20 @@ $cyan: #00bcd4;
   .q-dialog__inner > .q-card {
     max-height: 92vh;
     overflow-y: auto;
+  }
+}
+/* ── Hitster-Logo auf der Startseite (Hauptmenü, Startebene) ──────────────
+   Steht mit den Knöpfen als Block mittig in der Höhe, kleiner Abstand nach
+   unten zu den Knöpfen. Auf den anderen Seiten gibt es kein Logo. */
+.page-logo {
+  display: block;
+  width: 100%;
+  max-width: 480px;
+  margin: 0 auto 28px;
+}
+@media (max-width: 599px) {
+  .page-logo {
+    max-width: 320px;
+    margin: 0 auto 20px;
   }
 }

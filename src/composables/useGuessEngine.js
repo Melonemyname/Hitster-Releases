@@ -1,5 +1,12 @@
 import { Notify } from "quasar";
 import { validateYearGuess } from "../utils/gameConstants";
+import {
+  splitVariants,
+  yearsOf,
+  closestYear,
+  normalizeMatchText,
+  titleMatchForms,
+} from "../utils/songVariants";
 
 /**
  * Composable für Rate-/Platzierungs-Logik, Einwände und Text-Matching.
@@ -74,66 +81,40 @@ export function useGuessEngine(state, { loadAnswerData }) {
     placementInterval = null;
     raffleInterval = null;
   };
+  // useSongManager entsteht vor diesem Composable und erreicht die Timer
+  // deshalb über deps (Skip räumt einen laufenden Einwand ab).
+  if (state.deps) state.deps.clearObjectionTimers = clearObjectionTimers;
 
   // ── Text-Matching ───────────────────────────────────────────────────
 
-  const normalizeGuessText = (value) => {
-    return (value || "")
+  // Normalisierung und Titel-Aufbereitung liegen in songVariants, weil
+  // useGameState dieselben Regeln zum Erkennen doppelter Songs braucht.
+  const normalizeGuessText = (value) => normalizeMatchText(value);
+
+  // „&", „and" und „und" gelten im Künstlernamen als gleich, damit „Kool and
+  // the Gang" für „Kool & The Gang" und „Simon und Garfunkel" für „Simon &
+  // Garfunkel" zählen. Nach der Normalisierung steht dann überall „and".
+  const unifyArtistConjunctions = (value) =>
+    (value || "")
       .toString()
-      .toLowerCase()
-      .replace(/ß/g, "ss")
-      .replace(/æ/g, "ae")
-      .replace(/œ/g, "oe")
-      .replace(/ø/g, "o")
-      .replace(/d/g, "d")
-      .replace(/l/g, "l")
-      .replace(/þ/g, "th")
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/[^a-z0-9]/g, "");
-  };
+      .replace(/\s*(?:&|\+)\s*/g, " and ")
+      .replace(/\bund\b/gi, "and");
 
-  const stripFeaturingFromTitle = (value) => {
-    return (value || "")
-      .toString()
-      .replace(/\s*[([–—-]?\s*\b(feat\.?|ft\.?|featuring)\b.*$/i, "")
-      .trim();
-  };
-
-  const stripVersionDescriptors = (value) => {
-    // Ganze Klammern-Zusätze im Titel werden für den Vergleich entfernt.
-    // Beispiele die dadurch matchen sollen:
-    //   „Main Titel Theme (From ...)" ≡ „Main Titel Theme"
-    //   „Song (Remastered 2011)"       ≡ „Song"
-    //   „Track [Radio Edit]"            ≡ „Track"
-    //   „Song - Remastered"             ≡ „Song"
-    // Zusätzlich Trenn-Suffixe hinter Bindestrich (Remaster/Reimagined).
-    return (
-      (value || "")
-        .toString()
-        // 1) Runde und eckige Klammern samt Inhalt weg.
-        .replace(/\s*\([^)]*\)/g, "")
-        .replace(/\s*\[[^\]]*\]/g, "")
-        // 2) Fassungs-Hinweis nach " - " (Spotify-Konvention):
-        //    „Song - 2011 Remaster", „Shine - Acoustic", „Theme - From ...".
-        //    Die Leerzeichen um den Bindestrich sind Pflicht, sonst wuerde
-        //    ein Titel wie „Played-A-Live" zu „Played-A" verstuemmelt.
-        .replace(/\s+[-–—]\s+.*\b(remaster(?:ed)?|reimagin(?:ed)?|re-?recorded|live|acoustic|unplugged|instrumental|demo|mono|stereo|radio\s+edit|single\s+version|album\s+version|extended\s+(?:version|mix)|edit|mix|from\b.*)\b.*$/gi, "")
-        // 3) Suffix ohne Klammern („Song Remastered 2011").
-        .replace(/\s+\b(remaster(?:ed)?|reimagin(?:ed)?)\b.*$/gi, "")
-        .trim()
-    );
-  };
-
+  // Mögliche richtige Antworten für ein Künstlerfeld: jede `;`-Variante als
+  // Ganzes und zusätzlich jeder einzeln genannte Beteiligte (Komma aus
+  // Exportify, Featuring, „ x "). Bewusst NICHT an „&" oder „und" trennen:
+  // „Kool" allein ist keine Antwort für „Kool & The Gang".
   const splitArtistCandidates = (value) => {
-    return (value || "")
-      .toString()
-      // Semikolon ist in den Song-Daten der häufigste Trenner zwischen
-      // mehreren Künstlern („Luis Fonsi;Demi Lovato"). Ohne ihn galt der
-      // Name eines einzelnen Beteiligten als falsche Antwort.
-      .split(/,|;|&| feat\.?| ft\.?| featuring | x | und /i)
-      .map((part) => part.trim())
-      .filter(Boolean);
+    const candidates = [];
+    for (const variant of splitVariants(value)) {
+      candidates.push(variant);
+      for (const part of variant.split(
+        /,| feat\.?| ft\.?| featuring | x /i,
+      )) {
+        if (part.trim()) candidates.push(part.trim());
+      }
+    }
+    return [...new Set(candidates.map(unifyArtistConjunctions))];
   };
 
   const levenshteinDistance = (a, b) => {
@@ -193,10 +174,8 @@ export function useGuessEngine(state, { loadAnswerData }) {
   const movieMatches = (input, expected) => {
     const gWord = movieWordNorm(input);
     if (gWord.length < 2) return false;
-    const aliases = String(expected || "")
-      .split("|")
-      .map((a) => a.trim())
-      .filter(Boolean);
+    // Varianten mit `;` (seit 1.0.8, wie bei allen Feldern) oder `|` (alt).
+    const aliases = splitVariants(expected);
     return aliases.some((alias) => {
       if (fuzzyTextMatch(input, alias)) return true;
       const aWord = movieWordNorm(alias);
@@ -213,24 +192,24 @@ export function useGuessEngine(state, { loadAnswerData }) {
     const artistInput = (guessedArtist.value || "").trim();
     const yearInput = guessedYear.value;
 
-    // Reihenfolge ist wichtig: ERST die Klammern-Zusätze, DANN das Featuring.
-    // Andersherum schneidet `stripFeaturingFromTitle` bei einem Titel wie
-    // „Sucker for Pain (with … feat. X Ambassadors)" ab dem „feat." alles ab,
-    // samt schließender Klammer. `stripVersionDescriptors` findet danach kein
-    // vollständiges Klammerpaar mehr, und der halbe Zusatz bleibt stehen –
-    // der Titel galt dann nur mit mitgetippter Gästeliste als richtig.
-    const expectedTitle = stripFeaturingFromTitle(
-      stripVersionDescriptors(correctData.title || ""),
+    // Mehrere Titel-Varianten mit `;`: jede zählt als richtig. Zu jeder
+    // Variante zählen zwei Formen, ohne Klammerinhalt und mit Klammerinhalt
+    // (siehe titleMatchForms), damit „Satisfaction" und „I Can't Get No
+    // Satisfaction" beide für „(I Can't Get No) Satisfaction" gelten.
+    const expectedTitles = splitVariants(correctData.title).flatMap((t) =>
+      titleMatchForms(t),
     );
-    const guessedTitleBase = stripFeaturingFromTitle(
-      stripVersionDescriptors(titleInput),
-    );
+    const guessedTitleForms = titleMatchForms(titleInput);
     const titleCorrect =
       titleInput.length > 0
-        ? fuzzyTextMatch(guessedTitleBase, expectedTitle)
+        ? guessedTitleForms.some((g) =>
+            expectedTitles.some((t) => fuzzyTextMatch(g, t)),
+          )
         : null;
 
     const expectedArtists = splitArtistCandidates(correctData.artist || "");
+    // Auch die Eingabe als Ganzes und in Teilen: wer „A feat. B" tippt, hat
+    // mit A oder B recht, wer „Earth, Wind & Fire" tippt, mit dem Ganzen.
     const guessedArtists = splitArtistCandidates(artistInput);
     const artistCorrect =
       artistInput.length > 0
@@ -240,13 +219,15 @@ export function useGuessEngine(state, { loadAnswerData }) {
             ),
           )
         : null;
+    // Mehrere Jahre: gewertet wird das, das am nächsten am Tipp liegt.
+    const targetYear = closestYear(yearsOf(correctData), yearInput);
     const yearDifference =
       yearInput !== null && yearInput !== ""
-        ? Math.abs(Number(yearInput) - Number(correctData.year || 0))
+        ? Math.abs(Number(yearInput) - Number(targetYear || 0))
         : null;
     const yearAccurate =
       yearDifference !== null
-        ? validateYearGuess(Number(yearInput), Number(correctData.year || 0))
+        ? validateYearGuess(Number(yearInput), Number(targetYear || 0))
         : null;
 
     // Film/Serie (nur relevant im Film-Modus; null, wenn nichts eingegeben oder
@@ -391,15 +372,32 @@ export function useGuessEngine(state, { loadAnswerData }) {
     timeline.splice(insertIndex, 0, resolvedCard);
   };
 
-  const placeCard = (playerIndex, position) => {
+  // `playerIndex` ist die Zeitleiste, in die gelegt wird. Auch Einwender legen
+  // in die Zeitleiste des Spielers am Zug. `actorIndex` ist, wer handelt: Gast-
+  // Aktionen kommen mit dem Slot des Absenders und werden gegen dessen Rolle
+  // geprüft. Lokal und am Host-Gerät bleibt er leer, dort steuert die Oberfläche.
+  const placeCard = (playerIndex, position, actorIndex = null) => {
     if (!currentCard.value || showFeedback.value) return;
 
-    if (!isObjectionPhase.value && playerIndex !== currentPlayerIndex.value)
-      return;
-    if (isObjectionPhase.value && playerIndex !== currentPlayerIndex.value)
-      return;
+    if (playerIndex !== currentPlayerIndex.value) return;
+    if (actorIndex !== null && actorIndex !== undefined) {
+      // Im Normalfall legt nur der Spieler am Zug, in der Einwandphase nur
+      // der Einwender, der gerade dran ist. Damit zählt auch ein verspäteter
+      // Doppeltipp eines Einwenders nicht als Einwand des nächsten.
+      const expected = isObjectionPhase.value
+        ? currentObjectionPlayerIndex.value
+        : currentPlayerIndex.value;
+      if (actorIndex !== expected) return;
+    }
 
-    const timeline = playerTimelines.value[playerIndex].cards;
+    const timeline = playerTimelines.value[playerIndex]?.cards;
+    if (!timeline) return;
+    if (
+      !Number.isInteger(position) ||
+      position < 0 ||
+      position > timeline.length
+    )
+      return;
 
     if (isObjectionPhase.value) {
       // Während des Opt-in-Fensters wird noch nicht platziert.
@@ -408,9 +406,10 @@ export function useGuessEngine(state, { loadAnswerData }) {
 
       const objectorIndex = currentObjectionPlayerIndex.value;
       const objector = playerTimelines.value[objectorIndex];
+      // Einwände prüfen gegen dasselbe Kartenjahr wie der Spieler am Zug.
       const isPlacementCorrect = evaluateObjectionPlacement(
         position,
-        currentCard.value.year,
+        currentCard.value.placedYear || currentCard.value.year,
       );
 
       objectionAttempts.value.push({
@@ -446,6 +445,8 @@ export function useGuessEngine(state, { loadAnswerData }) {
       playerName: playerTimelines.value[playerIndex].name,
     };
     pendingPlacement.value = { ...pendingPlacementOriginal.value };
+    // Neue Platzierung, noch nicht ausgewertet (submitGuess prüft darauf).
+    pendingPlacementResult.value = null;
 
     playerHasGuessed.value = true;
     activeGuessPlayerIndex.value = playerIndex;
@@ -478,7 +479,14 @@ export function useGuessEngine(state, { loadAnswerData }) {
 
   // ── Raten / Einwand ─────────────────────────────────────────────────
 
+  // Läuft gerade eine Auswertung? Zwischen Aufruf und gesetztem
+  // `pendingPlacementResult` liegt ggf. ein `await loadAnswerData()`, ein
+  // Doppelklick käme sonst in dieser Lücke ein zweites Mal durch.
+  let submitGuessRunning = false;
+
   const submitGuess = async () => {
+    if (submitGuessRunning) return;
+    submitGuessRunning = true;
     try {
       let correctData = currentCard.value;
       if (!correctData || !correctData.year) {
@@ -517,26 +525,42 @@ export function useGuessEngine(state, { loadAnswerData }) {
         });
         return;
       }
+      // Diese Platzierung wurde schon ausgewertet (z. B. Doppelklick oder
+      // doppelt angekommenes `guest:submitGuess` im Einwandfenster). Eine
+      // zweite Auswertung würde Bonuspunkte neu vergeben und die Einwände
+      // neu starten.
+      if (pendingPlacementResult.value) return;
 
       const timeline = playerTimelines.value[pending.playerIndex].cards;
+      // Mehrere Jahre (`;`) sind für Mehrdeutigkeiten gedacht, etwa einen
+      // Song auf zwei Alben. Die Karte bekommt das eingegebene Jahr, wenn es
+      // eines der hinterlegten ist, sonst das Hauptjahr. Nur gegen dieses
+      // Kartenjahr wird die Platzierung geprüft, und damit liegt die Karte
+      // danach in der Zeitleiste (buildCardFromCurrent liest placedYear).
+      const kartenJahre = yearsOf(correctData);
+      const tipp = Number(guessedYear.value);
+      const kartenJahr = kartenJahre.includes(tipp)
+        ? tipp
+        : Number(correctData.year || 0);
+      if (currentCard.value) currentCard.value.placedYear = kartenJahr;
       const isPlacementCorrect = evaluatePlacement(
         timeline,
         pending.position,
-        correctData.year,
+        kartenJahr,
         true,
       );
       const bonus = buildBonusResult(correctData);
       guessResults.value = bonus;
-      pendingGuessPoints.value = calculateGuessPoints(
-        bonus,
-        correctData.year,
-      );
+      // Bei mehreren Jahren zählt für „Jahr exakt" das, das dem Tipp am
+      // nächsten liegt.
+      const guessYear = closestYear(yearsOf(correctData), guessedYear.value);
+      pendingGuessPoints.value = calculateGuessPoints(bonus, guessYear);
       pendingGuessObjectionReward.value =
-        calculateGuessObjectionReward(bonus, correctData.year);
+        calculateGuessObjectionReward(bonus, guessYear);
 
       pendingPlacementResult.value = {
         isPlacementCorrect,
-        cardYear: correctData.year,
+        cardYear: kartenJahr,
         cardTitle: correctData.title || "Unbekannt",
         cardArtist: correctData.artist || "Unbekannt",
         playerName: playerTimelines.value[pending.playerIndex].name,
@@ -560,6 +584,8 @@ export function useGuessEngine(state, { loadAnswerData }) {
         message: `Fehler beim Prüfen: ${error.message}`,
         timeout: 3000,
       });
+    } finally {
+      submitGuessRunning = false;
     }
   };
 
@@ -597,11 +623,33 @@ export function useGuessEngine(state, { loadAnswerData }) {
     objectionOptInActive.value = true;
     showObjectionDialog.value = true;
     objectionOptInCountdown.value = OBJECTION_OPT_IN_SECONDS;
+    runOptInTimer();
+    return true;
+  };
+
+  // Sekundentakt des Opt-in-Fensters (zählt den aktuellen Countdown herunter).
+  const runOptInTimer = () => {
+    if (optInInterval) clearInterval(optInInterval);
     optInInterval = setInterval(() => {
       objectionOptInCountdown.value -= 1;
       if (objectionOptInCountdown.value <= 0) closeOptInWindow();
     }, 1000);
-    return true;
+  };
+
+  // Sekundentakt des Einwenders, der gerade platziert.
+  const runPlacementTimer = () => {
+    if (placementInterval) clearInterval(placementInterval);
+    placementInterval = setInterval(() => {
+      objectionPlacementCountdown.value -= 1;
+      if (objectionPlacementCountdown.value <= 0) {
+        Notify.create({
+          type: "warning",
+          message: `Zeit abgelaufen, ${playerTimelines.value[currentObjectionPlayerIndex.value]?.name} wird übersprungen.`,
+          timeout: 2000,
+        });
+        startNextObjectorPlacement(objectionQueuePos.value + 1);
+      }
+    }, 1000);
   };
 
   // Spieler meldet sich (oder wieder ab) für einen Einwand an.
@@ -655,20 +703,38 @@ export function useGuessEngine(state, { loadAnswerData }) {
     objectionPlacementCountdown.value = OBJECTION_PLACEMENT_SECONDS;
     Notify.create({
       type: "info",
-      message: `${playerTimelines.value[currentObjectionPlayerIndex.value].name}: Wähle deine Position (+) – ${OBJECTION_PLACEMENT_SECONDS}s.`,
+      message: `${playerTimelines.value[currentObjectionPlayerIndex.value].name}: Wähle deine Position über +, du hast ${OBJECTION_PLACEMENT_SECONDS} Sekunden.`,
       timeout: 2500,
     });
-    placementInterval = setInterval(() => {
-      objectionPlacementCountdown.value -= 1;
+    runPlacementTimer();
+  };
+
+  // Nach einem Host-Wechsel liefen die Einwand-Timer nur beim alten Host.
+  // Der neue Host setzt sie mit den übernommenen Restzeiten fort. Eine
+  // unterbrochene Auslosung startet neu (das Ergebnis stand noch nicht fest).
+  const resumeObjectionTimers = () => {
+    clearObjectionTimers();
+    if (!isObjectionPhase.value) return;
+    if (objectionRaffleActive.value) {
+      objectionRaffleActive.value = false;
+      resolveObjections();
+      return;
+    }
+    if (objectionOptInActive.value) {
+      if (objectionOptInCountdown.value <= 0) closeOptInWindow();
+      else runOptInTimer();
+      return;
+    }
+    if (currentObjectionPlayerIndex.value !== null) {
       if (objectionPlacementCountdown.value <= 0) {
-        Notify.create({
-          type: "warning",
-          message: `Zeit abgelaufen – ${playerTimelines.value[currentObjectionPlayerIndex.value].name} übersprungen.`,
-          timeout: 2000,
-        });
         startNextObjectorPlacement(objectionQueuePos.value + 1);
+      } else {
+        runPlacementTimer();
       }
-    }, 1000);
+      return;
+    }
+    // Kein Schritt offen, aber noch in der Einwandphase: direkt auswerten.
+    resolveObjections();
   };
 
   const beginObjection = (playerIdx) => {
@@ -701,11 +767,13 @@ export function useGuessEngine(state, { loadAnswerData }) {
     correctObjectorNames.value = successful.map((a) => a.playerName);
 
     if (result.isPlacementCorrect) {
-      // Aktueller Spieler lag richtig -> Einwände wirkungslos.
+      // Aktueller Spieler lag richtig, er behält die Karte. Wer mit seinem
+      // Einwand ebenfalls richtig lag, bekommt den Einwand zurück (siehe
+      // finalizeObjectionOutcome), denn falsch war der Einwand nicht.
       finalizeObjectionOutcome({
         type: "placer",
         winnerIndex: pending.playerIndex,
-        successful: [],
+        successful,
       });
       return;
     }
@@ -791,27 +859,35 @@ export function useGuessEngine(state, { loadAnswerData }) {
       }
     };
 
+    // Korrekte Einwender, die die Karte NICHT bekommen, erhalten ihren
+    // Einwand zurück. Gilt auch, wenn der Spieler am Zug selbst richtig lag.
+    const refundCorrectObjectors = (exceptIndex) => {
+      (successful || []).forEach((a) => {
+        if (a.playerIndex === exceptIndex) return;
+        const p = playerTimelines.value[a.playerIndex];
+        if (p) p.objections = Number(p.objections || 0) + 1;
+      });
+    };
+
+    // Die Rate-Boni (Titel, Künstler, Jahr) gehen in jedem Fall an den
+    // Spieler am Zug, unabhängig davon, ob seine Platzierung stimmte.
     if (type === "placer") {
       revealCardAt(pending.playerIndex, pending.position);
       applyPendingGuessRewards(pending.playerIndex);
+      refundCorrectObjectors(pending.playerIndex);
       feedbackCorrect.value = true;
       feedbackMessage.value = `${result.playerName} hat korrekt eingeordnet.`;
     } else if (type === "none") {
       removePlaceholderAt(pending.playerIndex, pending.position);
+      applyPendingGuessRewards(pending.playerIndex);
       feedbackCorrect.value = false;
-      feedbackMessage.value = `${result.playerName} hat falsch eingeordnet – Karte verfällt.`;
+      feedbackMessage.value = `${result.playerName} hat falsch eingeordnet, die Karte verfällt.`;
     } else {
       // Einwand-Gewinner
       removePlaceholderAt(pending.playerIndex, pending.position);
       insertResolvedCardForPlayer(winnerIndex);
       applyPendingGuessRewards(pending.playerIndex);
-      // Korrekte Einwender, die NICHT gewonnen haben, bekommen ihren Einwand zurück.
-      (successful || []).forEach((a) => {
-        if (a.playerIndex !== winnerIndex) {
-          const p = playerTimelines.value[a.playerIndex];
-          if (p) p.objections = Number(p.objections || 0) + 1;
-        }
-      });
+      refundCorrectObjectors(winnerIndex);
       // Kurzer Satz; die Liste der korrekten Einwände (inkl. Gewinner) steht darunter.
       objectionWinnerName.value = playerTimelines.value[winnerIndex].name;
       feedbackCorrect.value = true;
@@ -880,5 +956,6 @@ export function useGuessEngine(state, { loadAnswerData }) {
     toggleObjectionOptIn,
     closeOptInWindow,
     clearObjectionTimers,
+    resumeObjectionTimers,
   };
 }

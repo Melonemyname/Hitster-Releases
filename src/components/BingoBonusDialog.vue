@@ -1,21 +1,28 @@
 <template>
-  <q-dialog :model-value="modelValue" persistent @update:model-value="onUpdate">
+  <!-- Quasar legt `aria-labelledby` auf das role="dialog"-Element, der Name
+       kommt so aus der sichtbaren Ueberschrift. -->
+  <q-dialog
+    :model-value="modelValue"
+    persistent
+    aria-labelledby="bingo-bonus-title"
+    @update:model-value="onUpdate"
+  >
     <q-card class="bingo-bonus-dialog">
       <q-card-section class="bg-primary">
-        <div class="text-h6">
+        <div id="bingo-bonus-title" class="text-h6">
           <q-icon name="workspace_premium" class="q-mr-sm" />
           Bonus: Kreuz entfernen
         </div>
         <div class="text-subtitle2">
-          Du hast das Jahr exakt getroffen. Wähle ein Kreuz eines Gegnerteams,
-          das entfernt werden soll. Kreuze in bereits vollen 5er-Reihen sind
-          gesperrt (grau markiert).
+          Ihr habt das Jahr exakt getroffen. Wählt ein Kreuz eines anderen
+          Teams, das entfernt werden soll. Kreuze in bereits vollen 5er-Reihen
+          sind gesperrt (grau markiert).
         </div>
       </q-card-section>
 
       <q-card-section>
         <div v-if="opponentTeams.length === 0" class="text-caption">
-          Keine Gegner-Teams vorhanden – Bonus kann nicht angewendet werden.
+          Es gibt keine anderen Teams, der Bonus entfällt.
         </div>
         <div v-else class="bingo-bonus-teams">
           <div
@@ -35,18 +42,34 @@
                 @update:model-value="onSelectTeam"
               />
             </div>
-            <div class="bingo-bonus-team__grid">
+            <!-- Die Feld-Knoepfe hatten keinen zugaenglichen Namen (nur Farbe
+                 und ein Kreuz-Zeichen). Jetzt sagen sie Position, Farbe und
+                 Zustand an, die Auswahl zusaetzlich ueber aria-pressed. -->
+            <div
+              class="bingo-bonus-team__grid"
+              role="group"
+              :aria-label="`Karte von ${team.name}`"
+            >
               <button
                 v-for="(color, idx) in team.cells"
                 :key="idx"
                 type="button"
                 class="bingo-bonus-cell"
                 :class="cellClasses(team, idx)"
-                :style="{ '--cell-color': colorHex(color) }"
+                :style="{
+                  '--cell-color': colorHex(color),
+                  '--cell-text': textHex(color),
+                }"
                 :disabled="!isCellPickable(team, idx)"
+                :aria-label="cellLabel(team, idx, color)"
+                :aria-pressed="isCellSelected(team, idx) ? 'true' : 'false'"
                 @click="onPickCell(team.slotId, idx)"
               >
-                <span v-if="team.marks[idx]" class="bingo-bonus-cell__mark">
+                <span
+                  v-if="team.marks[idx]"
+                  class="bingo-bonus-cell__mark"
+                  aria-hidden="true"
+                >
                   ✕
                 </span>
               </button>
@@ -56,7 +79,8 @@
       </q-card-section>
 
       <q-card-actions align="right" class="q-pa-md">
-        <q-btn flat color="grey-7" label="Überspringen" @click="skip" />
+        <!-- Gedaempfte Theme-Schrift statt Quasar-Grau (rund 3:1). -->
+        <q-btn flat class="text-muted" label="Überspringen" @click="skip" />
         <q-btn
           color="positive"
           icon="check"
@@ -72,6 +96,8 @@
 <script>
 import { computed, ref, watch } from "vue";
 import { BINGO_COLORS, getBingoLines } from "../composables/useBingo";
+import { readableTextOn } from "../utils/themeColors";
+import { BINGO_COLOR_NAMES } from "./BingoCard.vue";
 
 // Zellen, die Teil einer bereits vollen Bingo-Linie sind, dürfen nicht
 // entfernt werden. Wir berechnen die Sperr-Menge pro Team lokal (der
@@ -115,6 +141,8 @@ export default {
     );
 
     const colorHex = (color) => BINGO_COLORS[color] || "#666";
+    // Kreuz-Farbe je Feldfarbe (Weiss lag auf Gruen, Gelb, Blau unter 2,5:1).
+    const textHex = (color) => readableTextOn(colorHex(color));
 
     const isCellPickable = (team, idx) => {
       if (!team.marks[idx]) return false;
@@ -131,6 +159,20 @@ export default {
           selectedSlotId.value === team.slotId &&
           selectedCellIndex.value === idx,
       };
+    };
+
+    const isCellSelected = (team, idx) =>
+      selectedSlotId.value === team.slotId && selectedCellIndex.value === idx;
+
+    const cellLabel = (team, idx, color) => {
+      const row = Math.floor(idx / 5) + 1;
+      const col = (idx % 5) + 1;
+      const name = BINGO_COLOR_NAMES[color] || color;
+      if (!team.marks[idx]) return `Reihe ${row}, Spalte ${col}: ${name}, frei`;
+      const locked = computeLockedIndices(team.marks).has(idx);
+      return `Reihe ${row}, Spalte ${col}: ${name}, angekreuzt${
+        locked ? ", gesperrt (volle Reihe)" : ""
+      }`;
     };
 
     const onSelectTeam = (slotId) => {
@@ -170,6 +212,9 @@ export default {
       selectedSlotId,
       selectedCellIndex,
       colorHex,
+      textHex,
+      isCellSelected,
+      cellLabel,
       isCellPickable,
       cellClasses,
       onSelectTeam,
@@ -232,6 +277,11 @@ export default {
   transform: scale(1.06);
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
 }
+/* Sichtbarer Tastaturfokus (WCAG 2.4.7) in der Flaechen-Schriftfarbe. */
+.bingo-bonus-cell:focus-visible {
+  outline: 3px solid var(--app-on-surface, #f5f5f5);
+  outline-offset: 2px;
+}
 .bingo-bonus-cell--locked {
   cursor: not-allowed;
   opacity: 0.45;
@@ -242,7 +292,7 @@ export default {
     0 0 0 5px var(--app-accent, #fff);
 }
 .bingo-bonus-cell__mark {
-  color: #fff;
+  color: var(--cell-text, #fff);
   font-weight: 700;
   font-size: 0.95rem;
   line-height: 1;

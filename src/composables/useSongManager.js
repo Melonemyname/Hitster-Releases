@@ -1,12 +1,13 @@
 import { Notify } from "quasar";
-import { openSongTab } from "../utils/songTabManager";
 import { getSongFileText } from "../utils/songDataProvider";
 import { getCustomVersionLinks } from "../utils/customVersionsStore";
 import { getRestrictedVersionLinks } from "../utils/restrictedVersionsStore";
 import {
+  createMetadataLookup,
   filterSongLinksWithMetadata,
   getTrackMetadataWithCache,
 } from "../utils/spotifyCsvService";
+import { songIdentitySignature } from "../utils/songVariants";
 
 const MAX_FETCH_RETRIES = 3;
 const FETCH_RETRY_DELAY_MS = 2000;
@@ -49,6 +50,22 @@ export function useSongManager(state, { socketEmit }) {
     pendingObjectionPlacement,
     playerIndexAfterResolution,
     isObjectionPhase,
+    showObjectionDialog,
+    objectionAttempts,
+    currentObjectionPlayerIndex,
+    objectionOptInActive,
+    objectionOptIns,
+    objectionOptInCountdown,
+    objectionQueue,
+    objectionQueuePos,
+    objectionPlacementCountdown,
+    objectionRaffleActive,
+    objectionRaffleNames,
+    objectionRaffleHighlight,
+    objectionRaffleWinner,
+    correctObjectorNames,
+    objectionWinnerName,
+    guessedMovie,
     showGuessDialog,
     playerSongPools,
     currentPlayerIndex,
@@ -58,6 +75,10 @@ export function useSongManager(state, { socketEmit }) {
     bingoPendingCardData,
     pendingSongUrl,
     songReadyConfirmed,
+    playedSongs,
+    turnCounts,
+    playerCount,
+    showVictoryDialog,
     // Konstanten
     SONG_POOL_FILE_MAPPING,
     LEGACY_PLAYED_LINKS_KEY,
@@ -67,7 +88,10 @@ export function useSongManager(state, { socketEmit }) {
     markSongAsPlayed,
     isDuplicateOnTable,
     finalizeGameBecauseNoSongsLeft,
+    finalizeRoundIfTurnCountsAreEqual,
     clearFeedbackCountdown,
+    openSongHere,
+    openSongOrPrompt,
   } = state;
 
   // ── Song-Links laden ────────────────────────────────────────────────
@@ -217,7 +241,7 @@ export function useSongManager(state, { socketEmit }) {
     }
     Notify.create({
       type: "positive",
-      message: "History erfolgreich gelöscht.",
+      message: "Gespielte Songs zurückgesetzt.",
       timeout: 1500,
     });
   };
@@ -225,23 +249,38 @@ export function useSongManager(state, { socketEmit }) {
   // ── Preload / Popup ─────────────────────────────────────────────────
 
   // Im Battle-Modus (playerSongPools gesetzt): Song-Links auf den Pool des
-  // aktuellen Spielers einschraenken. Sonst alle nutzen.
-  const filterLinksForCurrentPlayer = (links) => {
+  // gegebenen Spielers (Standard: der am Zug) einschraenken. Sonst alle nutzen.
+  const filterLinksForPlayer = (links, playerIdx) => {
     const perPlayerPools = playerSongPools?.value || [];
     if (perPlayerPools.length === 0) return links;
-    const idx = currentPlayerIndex?.value ?? 0;
+    const idx = playerIdx ?? currentPlayerIndex?.value ?? 0;
     const targetPool = perPlayerPools[idx];
     if (!targetPool) return links;
     const map = songLinkPoolMap?.value;
     if (!map || map.size === 0) return links;
     return links.filter((link) => map.get(link) === targetPool);
   };
+  const filterLinksForCurrentPlayer = (links) => filterLinksForPlayer(links);
+
+  // Alle noch nicht gespielten Links. Ausgeschlossen sind auch Links, deren
+  // Song (Titel plus erster Künstler, ohne Fassungs-Hinweise) schon lief:
+  // Derselbe Song steckt oft unter mehreren Track-IDs in den Daten, etwa als
+  // Original und als Remaster in einer anderen Version. Ohne diese Prüfung
+  // kam er im gemischten Pool zweimal dran.
+  const getUnplayedLinks = () => {
+    const playedSignatures = new Set(playedSongs?.value || []);
+    const lookup = playedSignatures.size > 0 ? createMetadataLookup() : null;
+    return allSongLinks.value.filter((link) => {
+      if (checkIfLinkPlayed(link)) return false;
+      if (!lookup) return true;
+      const sig = songIdentitySignature(lookup(link));
+      return !sig || !playedSignatures.has(sig);
+    });
+  };
 
   const preloadForNextCard = () => {
     if (allSongLinks.value.length === 0) return;
-    const available = filterLinksForCurrentPlayer(
-      allSongLinks.value.filter((link) => !checkIfLinkPlayed(link)),
-    );
+    const available = filterLinksForCurrentPlayer(getUnplayedLinks());
     if (available.length === 0) return;
     const idx = Math.floor(Math.random() * available.length);
     preloadedLink.value = available[idx];
@@ -249,7 +288,7 @@ export function useSongManager(state, { socketEmit }) {
 
   const openPopupEarly = (songUrl) => {
     if (!multiplayerMode.value) {
-      openSongTab(songUrl);
+      openSongHere(songUrl);
       return;
     }
     // Bingo-Modus: Song wird erst nach der Kategorie-Reveal-Animation
@@ -262,13 +301,20 @@ export function useSongManager(state, { socketEmit }) {
       return;
     }
     if (multiplayerIsHost.value) {
-      openSongTab(songUrl);
+      // Zieht ein Gast die Karte, kommt der Aufruf aus einem Socket-Ereignis
+      // ohne Klick am Host-Gerät. Dann bietet der Host-Kopf „Jetzt abspielen“.
+      openSongOrPrompt(songUrl);
     }
   };
 
   // ── Karte ziehen ────────────────────────────────────────────────────
 
   const drawNewCard = async (autoSkipDepth = 0) => {
+    // Schutz gegen Doppelklick bzw. doppelt ankommende Zieh-Wünsche: Ein
+    // zweiter Aufruf während eines laufenden Ladevorgangs würde einen
+    // weiteren Song verbrauchen. Der interne Neustart nach einem Skip
+    // setzt `loadingNextSong` vorher zurück und kommt deshalb durch.
+    if (loadingNextSong.value) return;
     // Preload wurde am Ende des vorherigen Zugs erstellt und gehoert im
     // Battle-Modus ggf. zum Pool des vorherigen Spielers -> vor dem Popup
     // pruefen und ggf. verwerfen, damit wir nicht den falschen Song oeffnen.
@@ -304,17 +350,25 @@ export function useSongManager(state, { socketEmit }) {
         playedLinksHistory.value = await loadPlayedLinksHistory();
       }
 
-      const availableLinks = filterLinksForCurrentPlayer(
-        allSongLinks.value.filter((link) => !checkIfLinkPlayed(link)),
-      );
+      const unplayedLinks = getUnplayedLinks();
+      const availableLinks = filterLinksForCurrentPlayer(unplayedLinks);
 
-      if (availableLinks.length === 0) {
+      if (unplayedLinks.length === 0) {
         finalizeGameBecauseNoSongsLeft();
         Notify.create({
           type: "warning",
           message: "Alle Songs wurden bereits gespielt.",
           timeout: 5000,
         });
+        loadingNextSong.value = false;
+        return;
+      }
+
+      if (availableLinks.length === 0) {
+        // Battle-Modus: Nur der Pool dieses Spielers ist leer, die anderen
+        // haben noch Songs. Das Spiel endet deshalb nicht mitten in der
+        // Runde, der Spieler setzt nur aus.
+        skipPlayersWithoutSongs(unplayedLinks);
         loadingNextSong.value = false;
         return;
       }
@@ -406,6 +460,7 @@ export function useSongManager(state, { socketEmit }) {
         artist: songData.artist,
         title: songData.title,
         year: songData.year,
+        years: songData.years || [],
         movie: songData.movie || "",
         ensemble: songData.ensemble || "",
         songUrl: currentSongLink.value,
@@ -448,6 +503,7 @@ export function useSongManager(state, { socketEmit }) {
               title: currentCard.value.title,
               artist: currentCard.value.artist,
               year: currentCard.value.year,
+              years: currentCard.value.years || [],
               // Band/Solo aus der Metadaten-CSV: erspart dem Host die Nachfrage
               // in der Bingo-Kategorie „Solo oder Gruppe?", wenn gesetzt.
               ensemble: currentCard.value.ensemble || "",
@@ -475,6 +531,47 @@ export function useSongManager(state, { socketEmit }) {
     }
   };
 
+  // ── Battle-Modus: leerer eigener Pool ───────────────────────────────
+
+  // Spieler am Zug ohne eigene Songs setzen aus. Ihr Zug zählt trotzdem
+  // (turnCounts), sonst würde nie wieder eine Runde voll und das Spiel könnte
+  // nicht enden. Nach jedem ausgesetzten Zug wird wie nach einem gespielten
+  // geprüft, ob die Runde vorbei ist und jemand allein vorn liegt. Dann ist
+  // der nächste Spieler mit Songs dran und zieht selbst.
+  const skipPlayersWithoutSongs = (unplayedLinks) => {
+    const total = playerCount?.value || playerTimelines.value.length || 0;
+    const skipped = [];
+    for (let step = 0; step < total; step++) {
+      const idx = currentPlayerIndex.value;
+      if (filterLinksForPlayer(unplayedLinks, idx).length > 0) break;
+      skipped.push(playerTimelines.value[idx]?.name || `Spieler ${idx + 1}`);
+      if (turnCounts?.value) {
+        turnCounts.value[idx] = Number(turnCounts.value[idx] || 0) + 1;
+      }
+      finalizeRoundIfTurnCountsAreEqual?.();
+      if (showVictoryDialog?.value) break;
+      currentPlayerIndex.value = (idx + 1) % total;
+    }
+    preloadedLink.value = null;
+    if (!showVictoryDialog?.value) {
+      const next = playerTimelines.value[currentPlayerIndex.value]?.name;
+      const wer =
+        skipped.length > 1
+          ? `${skipped.slice(0, -1).join(", ")} und ${skipped[skipped.length - 1]} haben`
+          : `${skipped[0]} hat`;
+      Notify.create({
+        type: "info",
+        message: `${wer} keine Songs mehr und ${skipped.length > 1 ? "setzen" : "setzt"} aus. Weiter geht es mit ${next}.`,
+        timeout: 4000,
+      });
+    }
+    try {
+      state.deps?.syncMultiplayerState?.();
+    } catch {
+      /* Deps evtl. noch nicht befüllt, der Watcher zieht nach. */
+    }
+  };
+
   // ── Song skippen ────────────────────────────────────────────────────
 
   const manualSkipSong = async () => {
@@ -482,7 +579,7 @@ export function useSongManager(state, { socketEmit }) {
       skipSongRequested.value = true;
       Notify.create({
         type: "info",
-        message: "Skip angefordert. Wechsel zum nächsten Song...",
+        message: "Skip! Der nächste Song wird geladen …",
         timeout: 1500,
       });
       return;
@@ -491,7 +588,7 @@ export function useSongManager(state, { socketEmit }) {
     if (!currentCard.value && !currentSongLink.value) {
       Notify.create({
         type: "warning",
-        message: "Aktuell gibt es keinen Song zum Skippen.",
+        message: "Gerade gibt es keinen Song zum Skippen.",
         timeout: 1500,
       });
       return;
@@ -500,6 +597,14 @@ export function useSongManager(state, { socketEmit }) {
     clearFeedbackCountdown();
     showFeedback.value = false;
     activeGuessPlayerIndex.value = null;
+    // Wer in diesem Zug schon Einwand erhoben hat, hat dafür einen Einwand
+    // abgegeben (placeCard in useGuessEngine). Der Zug fällt durch das
+    // Überspringen weg, also gibt es den Einwand zurück. Nach der Auflösung
+    // ist die Liste leer, ein Überspringen danach erstattet nichts doppelt.
+    for (const attempt of objectionAttempts.value || []) {
+      const p = playerTimelines?.value?.[attempt.playerIndex];
+      if (p) p.objections = Number(p.objections || 0) + 1;
+    }
     // Falls ein Placeholder in einer Timeline lag (der Aktive hatte gerade
     // platziert), muss der Platzhalter entfernt werden, damit er nach dem
     // Skip nicht als klickbarer „Leerslot" bestehen bleibt. Der Placeholder
@@ -518,8 +623,26 @@ export function useSongManager(state, { socketEmit }) {
     pendingGuessObjectionReward.value = 0;
     pendingObjectionPlacement.value = null;
     playerIndexAfterResolution.value = null;
+    // Laufenden Einwand vollständig abräumen (wie in doCloseFeedback), sonst
+    // laufen Opt-in-/Platzierungs-Timer weiter und lösen nach dem Skip eine
+    // Runde ohne Karte auf.
+    state.deps?.clearObjectionTimers?.();
     isObjectionPhase.value = false;
-    playerHasGuessed.value = false;
+    showObjectionDialog.value = false;
+    objectionAttempts.value = [];
+    currentObjectionPlayerIndex.value = null;
+    objectionOptInActive.value = false;
+    objectionOptIns.value = [];
+    objectionOptInCountdown.value = 0;
+    objectionQueue.value = [];
+    objectionQueuePos.value = 0;
+    objectionPlacementCountdown.value = 0;
+    objectionRaffleActive.value = false;
+    objectionRaffleNames.value = [];
+    objectionRaffleHighlight.value = 0;
+    objectionRaffleWinner.value = null;
+    correctObjectorNames.value = [];
+    objectionWinnerName.value = "";
 
     currentCard.value = null;
     playerHasGuessed.value = false;
@@ -527,6 +650,7 @@ export function useSongManager(state, { socketEmit }) {
     guessedTitle.value = "";
     guessedArtist.value = "";
     guessedYear.value = null;
+    guessedMovie.value = "";
     guessResults.value = null;
 
     // Multiplayer-Host: Skip an alle Clients broadcasten, damit auch dort

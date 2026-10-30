@@ -2,10 +2,24 @@
   <q-page class="stats-page">
     <div class="stats-container">
       <div class="row items-center q-mb-lg head-fab-space">
-        <q-btn flat round icon="arrow_back" @click="goBack" />
-        <div class="text-h5 q-ml-sm">Profil</div>
+        <q-btn
+          flat
+          round
+          icon="arrow_back"
+          aria-label="Zurück"
+          @click="goBack"
+        />
+        <!-- Seitenüberschrift als h1; Optik bleibt über text-h5. -->
+        <h1 class="text-h5 q-ml-sm q-my-none">Profil</h1>
         <q-space />
-        <q-btn flat round icon="refresh" :loading="loading" @click="load">
+        <q-btn
+          flat
+          round
+          icon="refresh"
+          :loading="loading"
+          aria-label="Aktualisieren"
+          @click="load"
+        >
           <q-tooltip>Aktualisieren</q-tooltip>
         </q-btn>
       </div>
@@ -14,16 +28,19 @@
         <q-spinner size="42px" color="primary" />
       </q-inner-loading>
 
-      <div v-if="error" class="text-negative q-mb-md">{{ error }}</div>
+      <div v-if="error" class="text-negative q-mb-md" role="alert">
+        {{ error }}
+      </div>
 
       <template v-if="!loading && data">
         <q-card class="stats-card q-mb-md">
           <q-card-section class="row items-center no-wrap">
             <q-avatar size="72px" color="grey-9" text-color="white">
+              <!-- Leeres alt: Der Name steht direkt daneben als Text. -->
               <img
                 v-if="avatarUrl(data.avatar)"
                 :src="avatarUrl(data.avatar)"
-                :alt="data.username"
+                alt=""
               />
               <q-icon v-else name="person" size="40px" />
             </q-avatar>
@@ -31,9 +48,12 @@
                  ein Name ohne Trennmoeglichkeit kann sonst nicht schrumpfen
                  und schiebt die ganze Seite seitlich auf (gemessen: 450px
                  Scrollbreite bei 375px Viewport). -->
-            <div class="text-h5 q-ml-md col ellipsis" :title="data.username">
+            <h2
+              class="text-h5 q-ml-md q-my-none col ellipsis"
+              :title="data.username"
+            >
               {{ data.username }}
-            </div>
+            </h2>
           </q-card-section>
         </q-card>
 
@@ -291,12 +311,16 @@ export default {
   border-radius: var(--surface-radius, 12px);
   padding: 16px;
   text-align: center;
+  /* Eigene Schriftfarbe: Ohne sie erbte die Kachel die Seiten-Schriftfarbe,
+     bei hellen Themes dunkel auf der dunklen Fläche (gemessen 1,1 bis 2,4:1). */
+  color: var(--app-on-surface);
 }
 .stat-tile__value {
   font-size: 1.9rem;
   font-weight: 700;
   line-height: 1.1;
-  color: var(--app-accent, #1976d2);
+  /* Akzent als Textfarbe auf der Fläche: die lesbare Variante (>= 4,5:1). */
+  color: var(--app-accent-text);
 }
 .stat-tile__label {
   margin-top: 4px;
@@ -306,7 +330,8 @@ export default {
 .stat-tile__sub {
   margin-top: 2px;
   font-size: 0.78rem;
-  opacity: 0.7;
+  /* Gedämpft über die Farbe statt opacity, damit 4,5:1 erhalten bleibt. */
+  color: var(--app-on-surface-muted);
 }
 .stats-value {
   font-weight: 600;

@@ -1,28 +1,40 @@
 <template>
+  <!-- aria-labelledby landet bei QDialog direkt auf dem role="dialog"-Element
+       und gibt dem Dialog den sichtbaren Titel als zugänglichen Namen. -->
   <q-dialog
     :model-value="modelValue"
+    :aria-labelledby="titleId"
     @update:model-value="(v) => $emit('update:modelValue', v)"
   >
     <q-card class="song-folder-dialog-card">
       <q-card-section class="row items-center q-pb-none">
-        <div class="text-h6">Songs-Ordner</div>
+        <div :id="titleId" class="text-h6">Songs-Ordner</div>
         <q-space />
-        <q-btn v-close-popup icon="close" flat round dense />
+        <q-btn
+          v-close-popup
+          icon="close"
+          flat
+          round
+          dense
+          aria-label="Schließen"
+        />
       </q-card-section>
 
       <q-card-section>
         <div class="text-body2 q-mb-md">
           <strong>Nur in der Desktop-App.</strong> Aus diesem Ordner liest die App
-          ihre Editionen, Link-Listen, die Metadaten-CSV und die Cover. Du kannst
-          die Dateien dort bearbeiten oder eigene Editionen als weitere
+          ihre Versionen, Link-Listen, die Metadaten-CSV und die Cover. Du kannst
+          die Dateien dort bearbeiten oder eigene Versionen als weitere
           <code>.txt</code> ablegen. Beim ersten Start wird der Ordner automatisch
-          mit den mitgelieferten Daten gefüllt.
+          mit den mitgelieferten Daten gefüllt. Updates bringen neue
+          Standard-Daten nur in Dateien und CSV-Abschnitte, die du nicht
+          verändert hast. Deine Änderungen bleiben erhalten.
           <br /><br />
           Nach einem Wechsel wird die App neu geladen, damit sie aus dem neuen
           Ordner liest.
         </div>
 
-        <div class="text-caption q-mb-xs" style="opacity: 0.7">Aktueller Ordner</div>
+        <div class="text-caption text-muted q-mb-xs">Aktueller Ordner</div>
         <div class="folder-path">{{ currentPath || "(wird bestimmt …)" }}</div>
       </q-card-section>
 
@@ -41,7 +53,7 @@
 </template>
 
 <script>
-import { ref, watch } from "vue";
+import { ref, watch, useId } from "vue";
 import { Notify } from "quasar";
 
 export default {
@@ -51,6 +63,8 @@ export default {
   },
   emits: ["update:modelValue"],
   setup(props, { emit }) {
+    // Eindeutige ID für den Dialogtitel (aria-labelledby).
+    const titleId = `song-folder-title-${useId()}`;
     const currentPath = ref("");
     const working = ref(false);
 
@@ -95,7 +109,7 @@ export default {
         emit("update:modelValue", false);
         Notify.create({
           type: "positive",
-          message: "Songs-Ordner gesetzt – App wird neu geladen.",
+          message: "Songs-Ordner gesetzt. Die App wird neu geladen.",
           timeout: 1500,
         });
         setTimeout(() => window.location.reload(), 800);
@@ -109,7 +123,7 @@ export default {
       }
     };
 
-    return { currentPath, working, pickFolder };
+    return { titleId, currentPath, working, pickFolder };
   },
 };
 </script>
@@ -126,5 +140,8 @@ export default {
   padding: 8px 10px;
   border-radius: var(--surface-radius, 10px);
   background: var(--surface-bg, rgba(255, 255, 255, 0.06));
+  /* Eigene Schriftfarbe: Ohne sie erbte der Pfad die Seiten-Schriftfarbe, die
+     bei hellen Themes dunkel ist und auf der dunklen Fläche kaum lesbar war. */
+  color: var(--app-on-surface);
 }
 </style>

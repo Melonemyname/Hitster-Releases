@@ -1,11 +1,23 @@
 <template>
   <q-page class="register-page flex flex-center">
     <q-card class="register-card">
+      <q-btn
+        flat
+        round
+        dense
+        icon="arrow_back"
+        class="register-back"
+        aria-label="Zurück"
+        @click="goBack"
+      >
+        <q-tooltip>Zurück</q-tooltip>
+      </q-btn>
       <q-card-section class="text-center q-pb-none">
         <q-icon name="person_add" color="primary" size="56px" />
-        <div class="text-h5 q-mt-sm">Account erstellen</div>
-        <div class="text-subtitle2 text-grey q-mb-md">
-          Für Multiplayer & gespeicherte Einstellungen
+        <!-- Seitenüberschrift als h1; Optik bleibt über text-h5. -->
+        <h1 class="text-h5 q-mt-sm q-mb-none">Account erstellen</h1>
+        <div class="text-subtitle2 text-muted q-mb-md">
+          Für Online-Spiele und gespeicherte Einstellungen
         </div>
       </q-card-section>
 
@@ -32,6 +44,7 @@
           <q-input
             v-model="username"
             label="Benutzername"
+            autocomplete="username"
             outlined
             dark
             autofocus
@@ -49,6 +62,7 @@
           <q-input
             v-model="password"
             label="Passwort"
+            autocomplete="new-password"
             :type="showPassword ? 'text' : 'password'"
             outlined
             dark
@@ -61,10 +75,17 @@
             <template #prepend>
               <q-icon name="lock" />
             </template>
+            <!-- Als Knopf statt klickbarem Symbol: per Tastatur erreichbar und
+                 mit Namen für Screenreader. -->
             <template #append>
-              <q-icon
-                :name="showPassword ? 'visibility_off' : 'visibility'"
-                class="cursor-pointer"
+              <q-btn
+                flat
+                round
+                dense
+                :icon="showPassword ? 'visibility_off' : 'visibility'"
+                :aria-label="
+                  showPassword ? 'Passwort verbergen' : 'Passwort anzeigen'
+                "
                 @click="showPassword = !showPassword"
               />
             </template>
@@ -73,6 +94,7 @@
           <q-input
             v-model="passwordConfirm"
             label="Passwort bestätigen"
+            autocomplete="new-password"
             :type="showPassword ? 'text' : 'password'"
             outlined
             dark
@@ -87,7 +109,7 @@
             </template>
           </q-input>
 
-          <div class="text-caption text-grey q-mb-xs">
+          <div class="text-caption text-muted q-mb-xs">
             Sicherheitsfrage (für Passwort-Wiederherstellung)
           </div>
           <SecurityQuestionFields
@@ -121,11 +143,10 @@
 
         <q-btn
           flat
-          color="grey"
-          label="Lokal ohne Login spielen"
-          icon="person_off"
+          label="Abbrechen"
+          icon="close"
           class="full-width"
-          @click="$router.push('/')"
+          @click="goBack"
         />
       </q-card-section>
     </q-card>
@@ -154,6 +175,18 @@ export default {
 
   setup() {
     const router = useRouter();
+    // Zurück: dorthin, wo man herkam (Hauptmenü, Lobby-Versuch …), sonst ins
+    // Hauptmenü. Vorher gab es auf der Seite keinen Weg zurück außer
+    // „Lokal ohne Login spielen“.
+    // Liegt hinter der Anmeldeseite eine Seite, die selbst eine Anmeldung
+    // verlangt (etwa Statistik nach abgelaufener Sitzung), führte „Zurück“
+    // sofort wieder hierher. Dann ins Hauptmenü.
+    const goBack = () => {
+      const back = window.history.state?.back;
+      if (back && !router.resolve(back).meta?.requiresAuth) router.back();
+      else router.replace("/");
+    };
+
     const { syncFromServer } = useTheme();
     const username = ref("");
     const password = ref("");
@@ -218,6 +251,7 @@ export default {
     };
 
     return {
+      goBack,
       username,
       password,
       passwordConfirm,
@@ -240,10 +274,20 @@ export default {
   background: var(--app-bg, #121212);
 }
 .register-card {
+  position: relative;
   width: 100%;
   max-width: 420px;
-  color: #fff;
+  /* Flächenschrift über das Token statt fest #fff (Theming-Regel). */
+  color: var(--app-on-surface);
   border-radius: 12px;
+}
+/* Über dem ersten Kartenabschnitt: Der liegt im DOM danach und hätte den
+   Knopf sonst überdeckt, Klicks kamen nicht an. */
+.register-back {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 1;
 }
 .server-hint {
   background: var(--surface-bg-weak);

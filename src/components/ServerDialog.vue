@@ -1,20 +1,30 @@
 <template>
+  <!-- aria-labelledby landet bei QDialog direkt auf dem role="dialog"-Element
+       und gibt dem Dialog den sichtbaren Titel als zugänglichen Namen. -->
   <q-dialog
     :model-value="modelValue"
+    :aria-labelledby="titleId"
     @update:model-value="(v) => $emit('update:modelValue', v)"
   >
     <q-card class="server-dialog-card">
       <q-card-section class="row items-center q-pb-none">
-        <div class="text-h6">Server-Verbindung</div>
+        <div :id="titleId" class="text-h6">Server-Verbindung</div>
         <q-space />
-        <q-btn v-close-popup icon="close" flat round dense />
+        <q-btn
+          v-close-popup
+          icon="close"
+          flat
+          round
+          dense
+          aria-label="Schließen"
+        />
       </q-card-section>
 
       <q-card-section>
         <div class="text-body2 q-mb-md">
           <strong>Nur für die Desktop-App und nur im Online-Modus</strong>
           (Räume erstellen/joinen) nötig. In der <strong>Web-Version</strong>
-          wird das <strong>nicht</strong> gebraucht – dort läuft alles bereits
+          wird das <strong>nicht</strong> gebraucht, dort läuft alles bereits
           über die Adresse, unter der die Seite geöffnet wurde.
           <br /><br />
           In der Desktop-App hier die Adresse des Host-Rechners eintragen
@@ -31,7 +41,7 @@
           hint="Mit http:// bzw. https:// und ggf. Port"
         />
 
-        <div class="text-caption q-mt-sm" style="opacity: 0.7">
+        <div class="text-caption text-muted q-mt-sm">
           Aktiv: {{ currentUrl || "(gleiche Herkunft)" }}
         </div>
       </q-card-section>
@@ -45,7 +55,7 @@
 </template>
 
 <script>
-import { ref, watch } from "vue";
+import { ref, watch, useId } from "vue";
 import { Notify } from "quasar";
 import { getServerUrl, setServerUrl } from "../utils/authService";
 
@@ -56,6 +66,9 @@ export default {
   },
   emits: ["update:modelValue"],
   setup(props, { emit }) {
+    // Eindeutige ID für den Dialogtitel (aria-labelledby). Der Dialog steckt
+    // sowohl im Layout als auch auf Login/Registrieren, daher nicht fest.
+    const titleId = `server-dialog-title-${useId()}`;
     const currentUrl = ref(getServerUrl());
     const draft = ref(currentUrl.value);
 
@@ -84,14 +97,14 @@ export default {
       emit("update:modelValue", false);
       Notify.create({
         type: "positive",
-        message: "Server-Adresse gespeichert – App wird neu geladen.",
+        message: "Server-Adresse gespeichert. Die App wird neu geladen.",
         timeout: 1500,
       });
       // Neu laden, damit laufende Verbindungen/Requests die neue Adresse nutzen.
       setTimeout(() => window.location.reload(), 800);
     };
 
-    return { currentUrl, draft, save };
+    return { titleId, currentUrl, draft, save };
   },
 };
 </script>

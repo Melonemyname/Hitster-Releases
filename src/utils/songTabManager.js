@@ -5,8 +5,10 @@
  *
  * 1. Desktop-App (Electron): über die Bridge (hitster.openSong) im nativen
  *    Spotify-Client (spotify:track:ID). Der Client ersetzt die laufende
- *    Wiedergabe, es gibt keine Tabs zum Schließen. Auf macOS und Linux startet
- *    der Main-Prozess die Wiedergabe sogar, ohne Spotify nach vorn zu holen.
+ *    Wiedergabe, es gibt keine Tabs zum Schließen. Der Main-Prozess startet
+ *    die Wiedergabe auch gleich (macOS AppleScript, Linux MPRIS, Windows
+ *    `spotify:track:ID?autoplay=true`). Holt sich Spotify unter Linux dabei nach vorn,
+ *    nimmt sich Hitster den Fokus danach zurück.
  *
  * 2. Browser mit Wunsch "in der App öffnen" (Standard: automatisch): über das
  *    Protokoll `spotify:`. Wichtig für Handys – ein per `window.open` geöffneter
@@ -74,6 +76,7 @@ function oeffneImTab(url) {
   // noopener/noreferrer weglassen, damit wir eine Referenz zum Schließen behalten
   // (Spotify als vertrauenswürdige Domain hat keinen Zugriff auf window.opener).
   lastSongWindow = window.open(url, "_blank");
+  return !!lastSongWindow;
 }
 
 /**
@@ -136,13 +139,29 @@ function versucheApp(id, mitRueckfall) {
   }, 1600);
 }
 
+// Darf der Song jetzt ohne Klick geöffnet werden? Die Desktop-App öffnet über
+// die Bridge und braucht keine Nutzergeste. Im Browser blockieren Chrome und
+// Co. `spotify:`-Links und Popups, wenn keine Nutzeraktivierung mehr besteht
+// (etwa bei einem Aufruf aus einem Socket-Ereignis). Browser ohne
+// `navigator.userActivation` versuchen es; dort zählt die Rückgabe von
+// openSongTab.
+export function canOpenSongWithoutClick() {
+  if (typeof window === "undefined") return false;
+  if (window.hitster?.openSong) return true;
+  const activation =
+    typeof navigator !== "undefined" ? navigator.userActivation : undefined;
+  return !(activation && activation.isActive === false);
+}
+
+// Rückgabe: false, wenn sicher nichts aufging (kein Link, Fenster vom Browser
+// blockiert). Sonst true; ob Spotify wirklich startet, lässt sich nicht prüfen.
 export function openSongTab(url) {
-  if (!url) return;
+  if (!url) return false;
 
   // Desktop-App: nativ öffnen (kein Tab-Wildwuchs, ersetzt die Wiedergabe).
   if (typeof window !== "undefined" && window.hitster?.openSong) {
     window.hitster.openSong(url);
-    return;
+    return true;
   }
 
   const id = trackId(url);
@@ -150,9 +169,9 @@ export function openSongTab(url) {
 
   // Ohne erkennbare Track-Kennung bleibt nur der Tab.
   if (!id || modus === "browser") {
-    oeffneImTab(url);
-    return;
+    return oeffneImTab(url);
   }
 
   versucheApp(id, modus === "auto");
+  return true;
 }

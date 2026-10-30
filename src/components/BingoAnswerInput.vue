@@ -1,14 +1,21 @@
 <template>
   <div class="bingo-answer">
-    <!-- Solo oder Gruppe -->
+    <!-- Solo oder Gruppe. Die Auswahl war nur an der Fuellung erkennbar,
+         `aria-pressed` sagt sie auch Screenreadern an; die Gruppe traegt den
+         Namen der Frage. -->
     <template v-if="category.id === 'solo-group'">
-      <div class="bingo-answer__buttons">
+      <div
+        class="bingo-answer__buttons"
+        role="group"
+        aria-label="Solo oder Gruppe?"
+      >
         <q-btn
           unelevated
           color="primary"
           label="Solo"
           class="bingo-answer__btn"
           :class="{ 'btn-unselected': modelValue !== 'solo' }"
+          :aria-pressed="modelValue === 'solo' ? 'true' : 'false'"
           :disable="disabled"
           @click="update('solo')"
         />
@@ -18,6 +25,7 @@
           label="Gruppe"
           class="bingo-answer__btn"
           :class="{ 'btn-unselected': modelValue !== 'group' }"
+          :aria-pressed="modelValue === 'group' ? 'true' : 'false'"
           :disable="disabled"
           @click="update('group')"
         />
@@ -26,13 +34,14 @@
 
     <!-- Vor 2000? -->
     <template v-else-if="category.id === 'before-2000'">
-      <div class="bingo-answer__buttons">
+      <div class="bingo-answer__buttons" role="group" aria-label="Vor 2000?">
         <q-btn
           unelevated
           color="primary"
           label="Vor 2000"
           class="bingo-answer__btn"
           :class="{ 'btn-unselected': modelValue !== 'before' }"
+          :aria-pressed="modelValue === 'before' ? 'true' : 'false'"
           :disable="disabled"
           @click="update('before')"
         />
@@ -42,6 +51,7 @@
           label="Ab 2000"
           class="bingo-answer__btn"
           :class="{ 'btn-unselected': modelValue !== 'after' }"
+          :aria-pressed="modelValue === 'after' ? 'true' : 'false'"
           :disable="disabled"
           @click="update('after')"
         />
@@ -52,7 +62,7 @@
     <template v-else-if="category.id === 'title'">
       <q-input
         :model-value="modelValue"
-        label="Song-Titel"
+        label="Songtitel"
         outlined
         dense
         autofocus
@@ -129,10 +139,17 @@ export default {
   },
   emits: ["update:modelValue"],
   setup(props, { emit }) {
-    const decadeOptions = Array.from({ length: 8 }, (_, i) => {
-      const decade = 1950 + i * 10;
-      return { label: `${decade}er`, value: decade };
-    });
+    // Von den 1900ern bis zum laufenden Jahrzehnt. Die Liste begann früher
+    // bei 1950, die Songdaten reichen aber bis 1908 zurück.
+    const FIRST_DECADE = 1900;
+    const currentDecade = Math.floor(new Date().getFullYear() / 10) * 10;
+    const decadeOptions = Array.from(
+      { length: (currentDecade - FIRST_DECADE) / 10 + 1 },
+      (_, i) => {
+        const decade = FIRST_DECADE + i * 10;
+        return { label: `${decade}er`, value: decade };
+      },
+    );
 
     const numberLabel = computed(() => {
       switch (props.category.id) {

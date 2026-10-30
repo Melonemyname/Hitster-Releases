@@ -95,6 +95,7 @@ VERSION_LABELS = [
      'Battle of the Generations (1985-2004)'),
     ('hitster-battle-generations-bis-1984.txt',
      'Battle of the Generations (bis 1984)'),
+    ('hitster-wacken-on-air.txt', 'Wacken On Air'),
 ]
 VERSION_LABEL_BY_FILE = dict(VERSION_LABELS)
 

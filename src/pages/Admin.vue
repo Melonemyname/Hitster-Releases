@@ -12,14 +12,17 @@
             @click="goBack"
           />
           <div>
-            <div class="text-h5">
+            <!-- Seitenüberschrift als h1; Optik bleibt über text-h5. -->
+            <h1 class="text-h5 q-my-none">
               <q-icon name="admin_panel_settings" class="q-mr-xs" />
               Nutzerverwaltung
-            </div>
-            <div class="text-caption" style="opacity: 0.75">
-              Nur für den Server-Owner (Admin) sichtbar. Nutzer anlegen und
-              löschen, in Bestenliste/Statistik ein- oder ausblenden und die
-              Ownership übertragen.
+            </h1>
+            <!-- Ohne opacity: Der Text liegt direkt auf dem Seitenhintergrund,
+                 jede Abschwächung kostet dort Kontrast. -->
+            <div class="text-caption">
+              Nur für den Serverbesitzer (Admin) sichtbar. Nutzer anlegen und
+              löschen, in Bestenliste/Statistik ein- oder ausblenden und den
+              Besitz übertragen.
             </div>
           </div>
         </div>
@@ -34,17 +37,16 @@
 
       <q-card class="admin-card">
         <q-card-section>
-          <div v-if="loading" class="text-center q-py-lg">
+          <div v-if="loading" class="text-center q-py-lg" role="status">
             <q-spinner color="primary" size="32px" />
-            <div class="q-mt-sm text-caption" style="opacity: 0.8">
+            <div class="q-mt-sm text-caption text-muted">
               Nutzer werden geladen …
             </div>
           </div>
           <template v-else>
             <div
               v-if="!users.length"
-              class="text-center text-caption q-py-lg"
-              style="opacity: 0.7"
+              class="text-center text-caption text-muted q-py-lg"
             >
               Keine Nutzer vorhanden.
             </div>
@@ -52,10 +54,11 @@
               <q-item v-for="u in users" :key="u.id">
                 <q-item-section avatar>
                   <q-avatar size="40px">
+                    <!-- Leeres alt: Der Name steht direkt daneben als Text. -->
                     <img
                       v-if="avatarUrl(u.avatar)"
                       :src="avatarUrl(u.avatar)"
-                      :alt="u.username"
+                      alt=""
                     />
                     <q-icon v-else name="person" />
                   </q-avatar>
@@ -90,7 +93,7 @@
                     dense
                     color="primary"
                     :disable="togglingHidden === u.id"
-                    aria-label="In Bestenliste und Statistik anzeigen"
+                    :aria-label="`${u.username} in Bestenliste und Statistik anzeigen`"
                     @update:model-value="(val) => onToggleHidden(u, val)"
                   >
                     <q-tooltip>
@@ -105,10 +108,10 @@
                     dense
                     icon="admin_panel_settings"
                     :loading="transferring === u.id"
-                    aria-label="Ownership übertragen"
+                    :aria-label="`Besitz an ${u.username} übertragen`"
                     @click="confirmTransfer(u)"
                   >
-                    <q-tooltip>Ownership (Admin) übertragen</q-tooltip>
+                    <q-tooltip>Besitz (Admin) übertragen</q-tooltip>
                   </q-btn>
                   <q-btn
                     v-if="!u.isAdmin"
@@ -118,14 +121,14 @@
                     color="negative"
                     icon="delete"
                     :loading="deletingUser === u.username"
-                    aria-label="Nutzer löschen"
+                    :aria-label="`Nutzer ${u.username} löschen`"
                     @click="confirmDelete(u)"
                   >
                     <q-tooltip>Nutzer löschen</q-tooltip>
                   </q-btn>
                   <q-icon v-else name="lock" size="20px" style="opacity: 0.5">
                     <q-tooltip
-                      >Owner-/Admin-Account kann nicht gelöscht werden</q-tooltip
+                      >Besitzer-/Admin-Account kann nicht gelöscht werden</q-tooltip
                     >
                   </q-icon>
                 </q-item-section>
@@ -141,7 +144,7 @@
             <q-icon name="lock" class="q-mr-xs" />
             Eingeschränkte Versionen
           </div>
-          <div class="text-caption q-mb-md" style="opacity: 0.75">
+          <div class="text-caption text-muted q-mb-md">
             Diese Versionen sind nicht im App-Bundle (z. B. Hitster 1 &amp; 2).
             Wähle je Version die Accounts, die sie sehen und spielen dürfen.
           </div>
@@ -151,12 +154,15 @@
           <template v-else>
             <div
               v-if="!restrictedVersions.length"
-              class="text-caption q-py-md"
-              style="opacity: 0.7"
+              class="text-caption text-muted q-py-md"
             >
               Keine eingeschränkten Versionen vorhanden.
             </div>
-            <q-list v-else separator>
+            <!-- role="none": Die Kopfzeilen der Ausklapp-Einträge sind Knöpfe
+                 (role="button"), ihr Inhalt enthält eine eigene Liste. Beides
+                 ist als direktes Kind einer role="list" unzulässig; die äußere
+                 Liste dient hier nur der Optik (Trennlinien). -->
+            <q-list v-else separator role="none">
               <q-expansion-item
                 v-for="rv in restrictedVersions"
                 :key="rv.id"
@@ -165,7 +171,7 @@
                 :caption="`${rv.trackCount} Songs · ${rv.allowedUserIds.length} freigegeben`"
               >
                 <div class="q-px-md q-pb-md">
-                  <div class="text-caption q-mb-xs" style="opacity: 0.7">
+                  <div class="text-caption text-muted q-mb-xs">
                     Freigegebene Accounts
                   </div>
                   <q-list dense>
@@ -195,10 +201,16 @@
     </div>
 
     <!-- Nutzer anlegen -->
-    <q-dialog v-model="showCreate" persistent>
+    <!-- aria-labelledby landet bei QDialog direkt auf dem role="dialog"-
+         Element und gibt dem Dialog den sichtbaren Titel als Namen. -->
+    <q-dialog
+      v-model="showCreate"
+      persistent
+      aria-labelledby="admin-create-title"
+    >
       <q-card style="min-width: 380px; max-width: 92vw">
         <q-card-section>
-          <div class="text-h6">
+          <div id="admin-create-title" class="text-h6">
             <q-icon name="person_add" class="q-mr-xs" />
             Neuen Nutzer anlegen
           </div>
@@ -207,6 +219,7 @@
           <q-input
             v-model="newUsername"
             label="Benutzername"
+            autocomplete="off"
             outlined
             autofocus
             :rules="[
@@ -216,31 +229,34 @@
           <q-input
             v-model="newPassword"
             label="Passwort"
+            autocomplete="new-password"
             :type="showPassword ? 'text' : 'password'"
             outlined
             class="q-mt-sm"
             :rules="[(val) => (val && val.length >= 6) || 'Min. 6 Zeichen']"
           >
+            <!-- Als Knopf statt klickbarem Symbol: per Tastatur erreichbar und
+                 mit Namen für Screenreader. -->
             <template #append>
-              <q-icon
-                :name="showPassword ? 'visibility_off' : 'visibility'"
-                class="cursor-pointer"
+              <q-btn
+                flat
+                round
+                dense
+                :icon="showPassword ? 'visibility_off' : 'visibility'"
+                :aria-label="
+                  showPassword ? 'Passwort verbergen' : 'Passwort anzeigen'
+                "
                 @click="showPassword = !showPassword"
               />
             </template>
           </q-input>
-          <div class="text-caption q-mt-sm" style="opacity: 0.8">
-            Die Sicherheitsfrage kann der Nutzer im Profil selbst hinterlegen –
-            solange sie fehlt, ist keine Passwort-Wiederherstellung möglich.
+          <div class="text-caption text-muted q-mt-sm">
+            Die Sicherheitsfrage kann der Nutzer im Profil selbst hinterlegen.
+            Solange sie fehlt, ist keine Passwort-Wiederherstellung möglich.
           </div>
         </q-card-section>
         <q-card-actions align="right" class="q-pa-md">
-          <q-btn
-            flat
-            label="Abbrechen"
-            color="grey-7"
-            @click="showCreate = false"
-          />
+          <q-btn flat label="Abbrechen" @click="showCreate = false" />
           <q-btn
             color="primary"
             icon="check"
@@ -402,8 +418,8 @@ export default {
     // Admin verliert dabei seine Rechte und landet auf der Startseite.
     const confirmTransfer = (user) => {
       Dialog.create({
-        title: "Ownership übertragen",
-        message: `Soll „${user.username}" neuer Owner (Admin) dieses Servers werden? Du verlierst damit deine Admin-Rechte.`,
+        title: "Besitz übertragen",
+        message: `Soll „${user.username}" neuer Besitzer (Admin) dieses Servers werden? Du verlierst damit deine Admin-Rechte.`,
         cancel: { label: "Abbrechen", flat: true, color: "grey-7" },
         ok: { label: "Übertragen", color: "negative", icon: "admin_panel_settings" },
         persistent: true,
@@ -414,7 +430,7 @@ export default {
           setIsAdmin(false);
           Notify.create({
             type: "positive",
-            message: `„${user.username}" ist jetzt Owner.`,
+            message: `„${user.username}" ist jetzt Besitzer des Servers.`,
             timeout: 2500,
           });
           router.replace("/");
@@ -504,6 +520,13 @@ export default {
 </script>
 
 <style scoped>
+/* Theme-Hintergrund wie auf allen anderen Seiten. Fehlte hier: Die Seite lag
+   auf dem Quasar-Grundschwarz, bei hellen Themes stand die dunkle
+   Seitenschrift darauf (Kontrast 1,01:1). */
+.admin-page {
+  min-height: 100vh;
+  background: var(--app-bg, #121212);
+}
 .admin-shell {
   max-width: var(--content-max-width, 1180px);
   margin: 0 auto;
@@ -556,5 +579,8 @@ export default {
   -webkit-backdrop-filter: blur(var(--surface-blur, 18px)) saturate(150%);
   border: 1px solid var(--surface-border, transparent);
   border-radius: var(--surface-radius, 12px);
+  /* Eigene Schriftfarbe: Ohne sie erbte die Karte die Seiten-Schriftfarbe,
+     bei hellen Themes dunkel auf der dunklen Fläche (gemessen 1,1 bis 2,4:1). */
+  color: var(--app-on-surface);
 }
 </style>

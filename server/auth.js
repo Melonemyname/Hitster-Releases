@@ -168,12 +168,22 @@ function setUserTheme (username, theme) {
 // JWT-Subject ist die stabile Nutzer-UUID (id). Der Username wandert nur zur
 // Anzeige/Kompatibilität mit ins Token. Identität = id, damit Umbenennungen die
 // Anmeldung nicht brechen und Tokens nicht an einen mutablen Namen hängen.
+// `tv` ist die Token-Version des Nutzers. Sie steigt bei jeder Passwortänderung
+// und macht damit alle vorher ausgestellten Tokens ungültig.
 function issueToken (user) {
   return jwt.sign(
-    { id: user.id, username: user.username },
+    { id: user.id, username: user.username, tv: tokenVersionOf(user) },
     JWT_SECRET,
     { expiresIn: JWT_EXPIRES_IN }
   )
+}
+
+// Token-Version eines Nutzers bzw. Tokens. Fehlt sie (Alt-Datensatz oder
+// Token von vor der Einführung), gilt 0, damit bestehende Sitzungen gültig
+// bleiben, bis das Passwort zum ersten Mal geändert wird.
+function tokenVersionOf (obj) {
+  const v = Number(obj?.tokenVersion ?? obj?.tv)
+  return Number.isInteger(v) && v >= 0 ? v : 0
 }
 
 // Nutzer über die stabile id finden.
@@ -184,17 +194,22 @@ function findUserById (id) {
 
 // Middleware-Helfer: Nutzer aus dem Token-Payload auflösen. `id` wird bevorzugt;
 // für noch gültige Alt-Tokens (nur `username`) dient der Username als Fallback.
+// Trägt das Token eine id, die es nicht mehr gibt (Account gelöscht), ist es
+// ungültig. Sonst gälte es für einen neu registrierten Account gleichen Namens.
+// Stimmt die Token-Version nicht mehr (Passwort inzwischen geändert), ist das
+// Token ebenfalls ungültig.
 function resolveTokenUser (payload) {
   if (!payload) return null
   const users = loadUsers()
+  let user = null
   if (payload.id) {
-    const byId = users.find(u => u.id === payload.id)
-    if (byId) return byId
+    user = users.find(u => u.id === payload.id) || null
+  } else if (payload.username) {
+    user = users.find(u => u.username === payload.username) || null
   }
-  if (payload.username) {
-    return users.find(u => u.username === payload.username) || null
-  }
-  return null
+  if (!user) return null
+  if (tokenVersionOf({ tv: payload.tv }) !== tokenVersionOf(user)) return null
+  return user
 }
 
 async function login (username, password) {
@@ -645,8 +660,11 @@ async function changePassword (username, oldPassword, newPassword) {
   const user = users.find(u => u.username === username)
   if (!user) return { ok: false, error: 'user_not_found' }
   user.passwordHash = newHash
+  // Alte Tokens (andere Geräte, abgegriffene Sitzungen) ungültig machen. Wer
+  // das Passwort ändert, bekommt gleich ein neues Token zurück.
+  user.tokenVersion = tokenVersionOf(user) + 1
   saveUsers(users)
-  return { ok: true }
+  return { ok: true, token: issueToken(user) }
 }
 
 function setAvatar (username, avatarPath) {
@@ -710,6 +728,8 @@ async function resetPasswordWithAnswer (username, answer, newPassword) {
   const user = users.find(u => u.username === username)
   if (!user) return { ok: false, error: 'user_not_found' }
   user.passwordHash = newHash
+  // Wie bei der Passwortänderung: alle bisherigen Tokens werden ungültig.
+  user.tokenVersion = tokenVersionOf(user) + 1
   saveUsers(users)
   return { ok: true, id: user.id, username: user.username, token: issueToken(user) }
 }

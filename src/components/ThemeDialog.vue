@@ -1,13 +1,23 @@
 <template>
+  <!-- aria-labelledby landet bei QDialog direkt auf dem role="dialog"-Element
+       und gibt dem Dialog den sichtbaren Titel als zugänglichen Namen. -->
   <q-dialog
     :model-value="modelValue"
+    :aria-labelledby="titleId"
     @update:model-value="(v) => $emit('update:modelValue', v)"
   >
     <q-card class="theme-dialog-card">
       <q-card-section class="row items-center q-pb-none">
-        <div class="text-h6">Design anpassen</div>
+        <div :id="titleId" class="text-h6">Design anpassen</div>
         <q-space />
-        <q-btn v-close-popup icon="close" flat round dense />
+        <q-btn
+          v-close-popup
+          icon="close"
+          flat
+          round
+          dense
+          aria-label="Schließen"
+        />
       </q-card-section>
 
       <!-- Live-Vorschau -->
@@ -83,6 +93,7 @@
                 :class="{ selected: isGradientPresetSelected(p.id) }"
                 :style="{ background: gradientCss(p) }"
                 :title="p.name"
+                :aria-pressed="isGradientPresetSelected(p.id) ? 'true' : 'false'"
                 @click="selectGradientPreset(p)"
               >
                 <span class="swatch__label">{{ p.name }}</span>
@@ -99,6 +110,8 @@
                 dense
                 :color="draft.direction === d.value ? 'primary' : 'grey-8'"
                 :title="d.label"
+                :aria-label="`Ausrichtung ${d.label}`"
+                :aria-pressed="draft.direction === d.value ? 'true' : 'false'"
                 @click="draft.direction = d.value"
               />
             </div>
@@ -115,6 +128,7 @@
                 :class="{ selected: isSolidPresetSelected(p.id) }"
                 :style="{ background: p.color }"
                 :title="p.name"
+                :aria-pressed="isSolidPresetSelected(p.id) ? 'true' : 'false'"
                 @click="selectSolidPreset(p)"
               >
                 <span class="swatch__label">{{ p.name }}</span>
@@ -185,6 +199,8 @@
                   dense
                   :color="draft.direction === d.value ? 'primary' : 'grey-8'"
                   :title="d.label"
+                  :aria-label="`Ausrichtung ${d.label}`"
+                  :aria-pressed="draft.direction === d.value ? 'true' : 'false'"
                   @click="draft.direction = d.value"
                 />
               </div>
@@ -194,7 +210,7 @@
 
             <div class="text-subtitle2 q-mb-sm">
               Schrift &amp; Buttons
-              <span class="text-caption text-grey"
+              <span class="text-caption text-muted"
                 >— automatisch generiert, anpassbar</span
               >
             </div>
@@ -265,13 +281,13 @@
             { label: 'Theme', value: 'theme', icon: 'format_color_fill' },
           ]"
         />
-        <div v-if="isDraftDefault" class="text-caption text-grey q-mt-xs">
+        <div v-if="isDraftDefault" class="text-caption text-muted q-mt-xs">
           Beim Standard-Theme sind nur die originalen Kartenfarben verfügbar.
         </div>
       </q-card-section>
 
       <q-card-actions align="between" class="q-px-md q-pb-md">
-        <q-btn flat label="Zurücksetzen" color="grey" @click="onReset" />
+        <q-btn flat label="Zurücksetzen" @click="onReset" />
         <div>
           <q-btn v-close-popup flat label="Abbrechen" class="q-mr-sm" />
           <q-btn
@@ -287,7 +303,7 @@
 </template>
 
 <script>
-import { reactive, ref, computed, watch } from "vue";
+import { reactive, ref, computed, watch, useId } from "vue";
 import { useTheme } from "../composables/useTheme";
 import { GRADIENT_DIRECTIONS, DEFAULT_THEME } from "../utils/themePresets";
 
@@ -298,6 +314,8 @@ export default {
   },
   emits: ["update:modelValue"],
   setup(props, { emit }) {
+    // Eindeutige ID für den Dialogtitel (aria-labelledby).
+    const titleId = `theme-dialog-title-${useId()}`;
     const {
       theme,
       presets,
@@ -439,6 +457,7 @@ export default {
     }
 
     return {
+      titleId,
       tab,
       draft,
       customType,
@@ -466,7 +485,8 @@ export default {
   max-width: 560px;
   max-height: 92vh;
   overflow-y: auto;
-  color: #fff;
+  /* Schrift über das Flächen-Token statt fest #fff (Theming-Regel). */
+  color: var(--app-on-surface);
 }
 
 .theme-preview {
@@ -553,7 +573,10 @@ export default {
   font-weight: 600;
   color: #fff;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
-  background: linear-gradient(transparent, rgba(0, 0, 0, 0.45));
+  /* Kräftigeres Band unter dem Namen: Mit dem früheren Verlauf ab transparent
+     lag weiße Schrift auf hellen Mustern (Sand, Sky, Mint) unter 4,5:1. Ab 55 %
+     Schwarz bleibt selbst über Weiß noch rund 4,7:1. */
+  background: linear-gradient(rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.7));
   text-align: left;
 }
 

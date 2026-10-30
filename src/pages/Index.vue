@@ -1,26 +1,14 @@
 <template>
   <q-page class="index-page">
-    <div class="start-shell">
-      <HitsterLogo class="index-logo q-mb-md" />
+    <!-- Ohne Einstiegsparameter zeigt "/" das Hauptmenü. Die Neustart-Dialoge
+         im Spiel springen dagegen mit Spielern, Modus usw. in der Adresse
+         direkt in die Einrichtung, dort an den passenden Schritt. -->
+    <MainMenu v-if="!isSetupView" />
 
-      <div class="text-center q-mb-md">
-        <q-btn
-          color="primary"
-          icon="groups"
-          label="Multiplayer Lobby"
-          @click="goToLobby"
-        />
-      </div>
-
-      <div class="text-center q-mb-lg">
-        <q-btn
-          color="secondary"
-          icon="folder_open"
-          label="Spielstand laden"
-          outline
-          @click="openLoadDialog"
-        />
-      </div>
+    <div v-else class="start-shell">
+      <!-- Kein Logo in der Einrichtung (nur auf der Startebene des
+           Hauptmenüs); die Überschrift bleibt für Screenreader. -->
+      <h1 class="sr-only">Lokales Spiel einrichten</h1>
 
       <q-card class="game-start-card">
         <q-card-section>
@@ -51,18 +39,17 @@
               />
               <div
                 v-if="gameMode === 'film'"
-                class="text-caption q-mb-md"
-                style="opacity: 0.8"
+                class="text-caption text-muted q-mb-md"
               >
-                Film/Serie-Modus: zusätzliches Ratefeld + eigenes Punktesystem.
-                Es wird ausschließlich die Soundtracks-Edition gespielt.
+                Film/Serie-Modus: zusätzliches Ratefeld und eigenes
+                Punktesystem. Spielbar sind nur Versionen mit Film- oder
+                Serienangaben.
               </div>
               <div
                 v-if="gameMode === 'battle'"
-                class="text-caption q-mb-md"
-                style="opacity: 0.8"
+                class="text-caption text-muted q-mb-md"
               >
-                Am besten mit den drei „Battle of the Generations"-Editionen
+                Am besten mit den drei „Battle of the Generations"-Versionen
                 spielen (die Empfehlung passt naturgemäß für bis zu 3 Spieler).
               </div>
 
@@ -70,12 +57,39 @@
                 <div class="text-subtitle1 q-mb-sm">
                   Mit welchen Versionen soll gespielt werden?
                 </div>
+                <!-- Auswahl auf einen Blick wie in der Online-Lobby, damit man
+                     bei vielen Versionen nicht das ganze Raster absuchen muss. -->
+                <div class="selected-pools-box">
+                  <div class="text-subtitle2 q-mb-xs">
+                    Ausgewählte Versionen ({{ selectedSongPools.length }})
+                  </div>
+                  <div
+                    v-if="selectedSongPoolOptions.length"
+                    class="active-pools-row"
+                  >
+                    <div
+                      v-for="pool in selectedSongPoolOptions"
+                      :key="pool.value"
+                      class="pool-chip"
+                    >
+                      <!-- Dekorativ: Der Name steht direkt daneben als Text. -->
+                      <img :src="pool.icon" alt="" class="pool-chip-icon" />
+                      <span class="pool-chip-name">{{ pool.label }}</span>
+                    </div>
+                  </div>
+                  <div v-else class="text-caption text-muted">
+                    Keine Version ausgewählt
+                  </div>
+                </div>
                 <!-- Weiter zusaetzlich oben, damit man bei vielen Versionen nicht
                    erst bis ans Ende scrollen muss. -->
                 <div class="row items-center wizard-top-nav">
-                  <div class="text-caption" style="opacity: 0.8">
-                    {{ selectedSongPools.length }} ausgewählt
-                  </div>
+                  <q-btn
+                    flat
+                    color="primary"
+                    label="Zurück"
+                    @click="leaveSetup"
+                  />
                   <q-space />
                   <q-btn
                     color="primary"
@@ -84,7 +98,7 @@
                     @click="goToStep('count')"
                   />
                 </div>
-                <div v-if="gameMode === 'film' && modeFilteredVersions.length === 0" class="text-caption q-mb-md" style="opacity: 0.8">
+                <div v-if="gameMode === 'film' && modeFilteredVersions.length === 0" class="text-caption text-muted q-mb-md">
                   Noch keine Film-/Serien-Version vorhanden. Erstelle eine
                   Version mit aktivem „Film-/Serien"-Schalter und trage die Filme
                   ein.
@@ -100,15 +114,16 @@
                       disabled: isFilmBlocked(option),
                     }"
                     :disabled="isFilmBlocked(option)"
+                    :aria-pressed="
+                      selectedSongPools.includes(option.value) ? 'true' : 'false'
+                    "
                     @click="toggleSongPool(option.value)"
                   >
                     <q-card class="timeline-look-card">
                       <q-card-section class="timeline-look-content">
-                        <img
-                          class="version-icon"
-                          :src="option.icon"
-                          :alt="option.label"
-                        />
+                        <!-- Leeres alt: Der Name steht darunter als Text und
+                             gibt dem Knopf seinen Namen. -->
+                        <img class="version-icon" :src="option.icon" alt="" />
                       </q-card-section>
                     </q-card>
                     <div class="version-name" :title="option.label">
@@ -130,8 +145,15 @@
                    Anfang, damit er ohne Scrollen erreichbar ist. -->
               <div
                 v-if="gameMode === 'battle'"
-                class="row justify-end wizard-top-nav"
+                class="row items-center wizard-top-nav"
               >
+                <q-btn
+                  flat
+                  color="primary"
+                  label="Zurück"
+                  @click="leaveSetup"
+                />
+                <q-space />
                 <q-btn
                   color="primary"
                   label="Weiter"
@@ -266,11 +288,11 @@
                   <strong>{{ currentBattlePlayerName }}</strong>
                 </div>
                 <q-space />
-                <div class="text-caption" style="opacity: 0.8">
+                <div class="text-caption text-muted">
                   Spieler {{ battleCurrentPlayerIdx + 1 }} / {{ playerCount }}
                 </div>
               </div>
-              <div class="text-caption q-mb-md" style="opacity: 0.8">
+              <div class="text-caption text-muted q-mb-md">
                 Bereits vergebene Versionen sowie Versionen mit stark
                 abweichender Songanzahl (±10 zur zuerst gewählten) sind
                 ausgegraut.
@@ -296,27 +318,29 @@
                       battleCurrentPlayerIdx,
                     )
                   "
+                  :aria-pressed="
+                    battleVersions[battleCurrentPlayerIdx] === option.value
+                      ? 'true'
+                      : 'false'
+                  "
                   @click="
                     selectBattleVersion(battleCurrentPlayerIdx, option.value)
                   "
                 >
                   <q-card class="timeline-look-card">
                     <q-card-section class="timeline-look-content">
-                      <img
-                        class="version-icon"
-                        :src="option.icon"
-                        :alt="option.label"
-                      />
+                      <img class="version-icon" :src="option.icon" alt="" />
                     </q-card-section>
                   </q-card>
                   <div class="version-name" :title="option.label">
                     {{ option.label }}
                     <span
                       v-if="option.trackCount"
-                      class="text-caption"
-                      style="opacity: 0.7; font-weight: 400"
+                      class="text-caption text-muted"
+                      style="font-weight: 400"
                     >
-                      · {{ option.trackCount }}
+                      · {{ option.trackCount
+                      }}<span class="sr-only"> Songs</span>
                     </span>
                   </div>
                 </button>
@@ -380,57 +404,6 @@
       </q-card>
     </div>
 
-    <q-dialog v-model="showLoadDialog" persistent>
-      <q-card style="min-width: 420px">
-        <q-card-section class="bg-primary">
-          <div class="text-h6">Spielstand laden</div>
-        </q-card-section>
-        <q-card-section>
-          <div class="q-mb-md text-body2">Hast du eine gespeicherte Datei?</div>
-          <div v-if="savedSessionMeta">
-            <div><strong>Lokaler Stand:</strong></div>
-            <div>
-              <strong>Gespeichert am:</strong>
-              {{ savedSessionMeta.savedAtDisplay }}
-            </div>
-            <div>
-              <strong>Spieler:</strong> {{ savedSessionMeta.playerCount }}
-            </div>
-            <div>
-              <strong>Songs gespielt:</strong>
-              {{ savedSessionMeta.playedSongsCount }}
-            </div>
-          </div>
-          <div v-else>Kein lokaler Spielstand gefunden.</div>
-        </q-card-section>
-        <q-card-actions align="right" class="q-pa-md stacked-actions">
-          <q-btn
-            flat
-            color="grey-7"
-            label="Abbrechen"
-            @click="showLoadDialog = false"
-          />
-          <q-btn
-            color="secondary"
-            label="Aus Browser laden"
-            :disable="!savedSessionMeta"
-            @click="loadSavedSession"
-          />
-          <q-btn
-            color="primary"
-            label="Datei auswählen"
-            @click="openSessionFilePicker"
-          />
-        </q-card-actions>
-      </q-card>
-    </q-dialog>
-    <input
-      ref="sessionFileInput"
-      type="file"
-      accept=".json,application/json"
-      style="display: none"
-      @change="handleSessionFileSelected"
-    />
   </q-page>
 </template>
 
@@ -439,7 +412,11 @@ import { ref, computed, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { GAME_CONSTANTS, validatePlayerCount } from "../utils/gameConstants";
 import { useVersions } from "../composables/useVersions";
-import HitsterLogo from "../components/HitsterLogo.vue";
+import {
+  clearStoredScores,
+  encodeNamesQuery,
+} from "../composables/useGameState";
+import MainMenu, { newGameId } from "../components/MainMenu.vue";
 
 // Reihenfolge der Wizard-Schritte. "battle-versions" wird nur im Battle-Modus
 // tatsaechlich angezeigt (v-if im Template), bleibt aber in der Reihenfolge
@@ -447,16 +424,32 @@ import HitsterLogo from "../components/HitsterLogo.vue";
 const STEP_ORDER = ["mode", "count", "names", "battle-versions", "starting"];
 // Toleranz fuer die "aehnliche Songanzahl"-Regel im Battle-Modus.
 const BATTLE_TRACKCOUNT_TOLERANCE = 10;
+// Parameter, mit denen "/" direkt in die Einrichtung springt statt ins
+// Hauptmenü: `setup` aus „Neues Spiel", der Rest aus den Neustart-Dialogen.
+const SETUP_QUERY_KEYS = [
+  "setup",
+  "renameOnly",
+  "carryScores",
+  "players",
+  "names",
+  "mode",
+  "playerSongPools",
+  "songPools",
+  "songPool",
+  "startingPlayer",
+];
 
 export default {
   name: "IndexPage",
 
-  components: { HitsterLogo },
+  components: { MainMenu },
 
   setup() {
-    const SESSION_STORAGE_KEY = "hitster-session-save-v1";
     const route = useRoute();
     const router = useRouter();
+    const isSetupView = computed(() =>
+      SETUP_QUERY_KEYS.some((key) => route.query[key] !== undefined),
+    );
     const step = ref("mode");
     const stepIndex = computed(() => {
       const idx = STEP_ORDER.indexOf(step.value);
@@ -468,12 +461,10 @@ export default {
     // Spielmodus: "normal", "film" (Extra-Ratefeld + Extra-Scoring) oder
     // "battle" (jeder Spieler waehlt eine eigene Version).
     const gameMode = ref("normal");
+    const LOCAL_GAME_MODES = ["normal", "film", "battle"];
     const playerCount = ref(null);
     const playerNames = ref([]);
     const startingPlayer = ref(null);
-    const showLoadDialog = ref(false);
-    const sessionFileInput = ref(null);
-    const savedSessionMeta = ref(null);
     const carryScoresFromQuery = ref([]);
     const hasCarryScoresFromQuery = ref(false);
     const selectedSongPools = ref([]);
@@ -518,6 +509,14 @@ export default {
         ),
       ];
     };
+
+    // Ausgewaehlte Versionen in Klick-Reihenfolge, fuer die Anzeige ueber dem
+    // Weiter-Knopf. Unbekannte Werte (z. B. noch nicht geladen) fallen raus.
+    const selectedSongPoolOptions = computed(() =>
+      selectedSongPools.value
+        .map((value) => allVersions.value.find((v) => v.value === value))
+        .filter(Boolean),
+    );
 
     const isValidCount = computed(() => validatePlayerCount(playerCount.value));
     const hasSelectedSongPools = computed(
@@ -679,7 +678,7 @@ export default {
       const normalizedPools = normalizeSongPools(effectivePools);
       const query = {
         players: playerCount.value,
-        names: playerNames.value.join(","),
+        names: encodeNamesQuery(playerNames.value),
         startingPlayer: startingPlayer.value,
         songPools: normalizedPools.join(","),
         songPool: normalizedPools[0] || "staffel1",
@@ -694,7 +693,16 @@ export default {
 
       if (hasCarryScoresFromQuery.value) {
         query.carryScores = carryScoresFromQuery.value.join(",");
+      } else {
+        // Frische Kennung: useGameState übernimmt gespeicherte Punkte nur,
+        // wenn sie zur Kennung des laufenden Spiels passen. Mit übernommenen
+        // Punkten (carryScores) regelt das Spiel die Kennung selbst.
+        query.gid = newGameId();
       }
+
+      // Neues Spiel: keine Punkte aus der Vorrunde erben. Übernommene Punkte
+      // kommen ausschließlich über `carryScores`.
+      clearStoredScores();
 
       router.push({
         name: "game",
@@ -702,86 +710,18 @@ export default {
       });
     };
 
-    const readSavedSessionMeta = () => {
-      try {
-        const raw = localStorage.getItem(SESSION_STORAGE_KEY);
-        if (!raw) return null;
-        const parsed = JSON.parse(raw);
-        const players = Array.isArray(parsed.players) ? parsed.players : [];
-        const songs = Array.isArray(parsed.playedLinksHistory)
-          ? parsed.playedLinksHistory
-          : [];
-        const savedAt = parsed.savedAt ? new Date(parsed.savedAt) : null;
-        return {
-          playerCount: players.length,
-          playedSongsCount: songs.length,
-          savedAtDisplay:
-            savedAt && !Number.isNaN(savedAt.getTime())
-              ? savedAt.toLocaleString()
-              : "Unbekannt",
-        };
-      } catch {
-        return null;
-      }
-    };
-
-    const goToLobby = () => {
-      router.push({ name: "lobby" });
-    };
-
-    const openLoadDialog = () => {
-      savedSessionMeta.value = readSavedSessionMeta();
-      showLoadDialog.value = true;
-    };
-
-    const loadSavedSession = () => {
-      showLoadDialog.value = false;
-      router.push({
-        name: "game",
-        query: {
-          loadSession: 1,
-        },
-      });
-    };
-
-    const parseSnapshotFromImport = (text) => {
-      const parsed = JSON.parse(text);
-      if (parsed && typeof parsed === "object" && parsed.players) {
-        return parsed;
-      }
-      const rawSession = parsed?.["hitster-session-save-v1"];
-      if (typeof rawSession === "string") {
-        return JSON.parse(rawSession);
-      }
-      throw new Error("Datei enthält keinen gültigen Spielstand.");
-    };
-
-    const openSessionFilePicker = () => {
-      sessionFileInput.value?.click();
-    };
-
-    const handleSessionFileSelected = async (event) => {
-      try {
-        const file = event?.target?.files?.[0];
-        if (!file) return;
-        const text = await file.text();
-        const snapshot = parseSnapshotFromImport(text);
-        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(snapshot));
-        savedSessionMeta.value = readSavedSessionMeta();
-        showLoadDialog.value = false;
-        router.push({
-          name: "game",
-          query: {
-            loadSession: 1,
-          },
-        });
-      } catch (error) {
-        // eslint-disable-next-line no-alert
-        alert(`Fehler beim Laden der Datei: ${error.message}`);
-      } finally {
-        if (event?.target) {
-          event.target.value = "";
-        }
+    // Zurück aus der Einrichtung ins Untermenü „Lokal spielen". Kam man von
+    // dort, wird der Verlauf zurückgespult, sonst stapelten sich Einträge.
+    // Übernommene Punkte aus einem Neustart gelten danach nicht mehr: Wer
+    // über das Menü ein neues Spiel beginnt, fängt bei null an.
+    const leaveSetup = () => {
+      carryScoresFromQuery.value = [];
+      hasCarryScoresFromQuery.value = false;
+      const target = router.resolve({ path: "/", query: { menu: "local" } });
+      if (window.history.state?.back === target.fullPath) {
+        router.back();
+      } else {
+        router.replace(target);
       }
     };
 
@@ -822,11 +762,33 @@ export default {
         step.value = "names";
       }
 
+      // Spielmodus aus der Vorrunde übernehmen. Ohne das wurde aus einem
+      // Film- oder Battle-Spiel beim Neustart mit neuen Namen ein normales.
+      // Bingo gibt es nur online, die Startseite bietet es nicht an.
+      const modeFromQuery = (route.query.mode || "").toString().trim();
+      if (LOCAL_GAME_MODES.includes(modeFromQuery)) {
+        gameMode.value = modeFromQuery;
+      }
+
       const songPoolsFromQuery = normalizeSongPools(route.query.songPools);
       const fallbackSinglePool = normalizeSongPools(route.query.songPool);
       const resolvedPools =
         songPoolsFromQuery.length > 0 ? songPoolsFromQuery : fallbackSinglePool;
       selectedSongPools.value = resolvedPools;
+
+      // Battle: Version pro Spieler in Spieler-Reihenfolge. Leere oder
+      // unbekannte Einträge bleiben offen und werden neu gewählt.
+      if (gameMode.value === "battle" && playerCount.value) {
+        const validPools = new Set(allVersions.value.map((v) => v.value));
+        const perPlayer = (route.query.playerSongPools || "")
+          .toString()
+          .split(",")
+          .map((v) => v.trim().toLowerCase());
+        battleVersions.value = Array.from(
+          { length: playerCount.value },
+          (_, i) => (validPools.has(perPlayer[i]) ? perPlayer[i] : null),
+        );
+      }
     };
 
     applyCarrySettingsFromRoute();
@@ -846,20 +808,15 @@ export default {
       startGame,
       canStartGame,
       gameMode,
-      showLoadDialog,
-      sessionFileInput,
-      savedSessionMeta,
-      openLoadDialog,
-      loadSavedSession,
-      openSessionFilePicker,
-      handleSessionFileSelected,
+      isSetupView,
+      leaveSetup,
       selectedSongPools,
+      selectedSongPoolOptions,
       visibleVersions,
       modeFilteredVersions,
       isFilmBlocked,
       toggleSongPool,
       hasSelectedSongPools,
-      goToLobby,
       battleVersions,
       battleCurrentPlayerIdx,
       currentBattlePlayerName,
@@ -912,20 +869,22 @@ export default {
   width: 100%;
 }
 
+/* Kasten mit den ausgewaehlten Versionen ueber dem Weiter-Knopf. Die Chips
+   selbst (.active-pools-row/.pool-chip) kommen zentral aus app.scss, damit sie
+   genau wie in der Lobby aussehen. */
+.selected-pools-box {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--surface-radius);
+}
+
 /* Nav-Zeile oben in jedem Wizard-Schritt: klare Trennung zum Inhalt darunter,
    damit z. B. Eingabefelder nicht direkt an den Buttons kleben. */
 .wizard-top-nav {
   margin-bottom: 20px;
   padding-bottom: 12px;
   border-bottom: 1px solid var(--surface-border, rgba(255, 255, 255, 0.08));
-}
-
-/* HITSTER-Logo im Index: Größe passend zur Karten-Breite; Farbe kommt aus
-   dem Theme (siehe HitsterLogo.vue). Zusätzlicher oberer Abstand, damit das
-   Logo nicht direkt am Seiten-Rand klebt. */
-.index-logo {
-  max-width: 460px;
-  margin: 24px auto 8px;
 }
 
 @media (max-width: 599px) {
@@ -942,9 +901,6 @@ export default {
     font-size: 1.4rem;
   }
 
-  .index-logo {
-    max-width: 320px;
-  }
 
   .start-stepper :deep(.q-stepper__title) {
     display: none;

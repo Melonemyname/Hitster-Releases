@@ -26,6 +26,7 @@ import iconGuilty from "../assets/versions/guilty.png";
 import iconSummer from "../assets/versions/summer.png";
 import iconHipHop from "../assets/versions/hiphop.png";
 import iconSchlager from "../assets/versions/schlager.png";
+import iconWacken from "../assets/versions/wacken.png";
 
 // Auswählbare Cover (für eigene Versionen) + Auflösung gespeicherter Preset-Keys.
 export const VERSION_ICONS = {
@@ -43,6 +44,7 @@ export const VERSION_ICONS = {
   summer: iconSummer,
   hiphop: iconHipHop,
   schlager: iconSchlager,
+  wacken: iconWacken,
 };
 
 // Löst ein gespeichertes Cover ({kind,ref}) in eine anzeigbare URL auf.

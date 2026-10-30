@@ -16,7 +16,8 @@
   backdrop-filter: blur(var(--surface-blur, 18px)) saturate(150%);
   -webkit-backdrop-filter: blur(var(--surface-blur, 18px)) saturate(150%);
   border: 1px solid var(--surface-border, transparent);
-  color: #fff;
+  color: var(--app-on-surface, #f5f5f5);
+  text-shadow: none;
   border-radius: var(--surface-radius, 16px);
   padding: 40px 32px 32px 32px;
   min-width: 320px;
@@ -48,7 +49,13 @@
   align-items: flex-start;
   padding-top: 40px;
 }
+// Alle Acryl-Flächen dieser Datei setzen ihre Schrift ausdrücklich auf
+// --app-on-surface: Sie sind immer dunkel getönt, würden sonst aber die
+// Seiten-Schrift --app-on-bg erben, die auf hellen Themes dunkel ist (1,1 bis
+// 2,4:1). Der Halo für Text direkt auf dem Hintergrund wird hier abgeschaltet.
 .bingo-placeholder__card {
+  color: var(--app-on-surface, #f5f5f5);
+  text-shadow: none;
   background: var(--surface-bg, rgba(255, 255, 255, 0.04));
   backdrop-filter: var(--surface-blur, blur(6px));
   border-radius: var(--surface-radius, 12px);
@@ -103,6 +110,8 @@
 // Bingos, Info, Einstellungsrad). Randomizer sitzt darunter in einer eigenen
 // Fläche (siehe .bingo-round-panel).
 .bingo-header-panel {
+  color: var(--app-on-surface, #f5f5f5);
+  text-shadow: none;
   padding: 16px 20px;
   background: var(--surface-bg, rgba(255, 255, 255, 0.04));
   backdrop-filter: blur(var(--surface-blur, 18px)) saturate(150%);
@@ -119,6 +128,8 @@
   align-items: center;
   gap: 24px;
   padding: 20px 24px 24px;
+  color: var(--app-on-surface, #f5f5f5);
+  text-shadow: none;
   background: var(--surface-bg, rgba(255, 255, 255, 0.04));
   backdrop-filter: blur(var(--surface-blur, 18px)) saturate(150%);
   -webkit-backdrop-filter: blur(var(--surface-blur, 18px)) saturate(150%);
@@ -218,6 +229,8 @@
 // Song-öffnen-Button). Sitzt als eigenständige Acryl-Fläche unter dem
 // Header-Panel; kein Nested-Override mehr nötig.
 .bingo-round-panel {
+  color: var(--app-on-surface, #f5f5f5);
+  text-shadow: none;
   background: var(--surface-bg, rgba(255, 255, 255, 0.04));
   backdrop-filter: blur(var(--surface-blur, 18px)) saturate(150%);
   -webkit-backdrop-filter: blur(var(--surface-blur, 18px)) saturate(150%);
@@ -236,34 +249,46 @@
   gap: 6px;
   margin-bottom: 10px;
 }
+// Kategorie-Chips: Die Chips sind Information (welche Kategorien es gibt),
+// deshalb keine Abschwächung per opacity mehr (weiße Schrift auf halb
+// durchsichtiger Farbe lag bei 1,4 bis 3,3:1). Stattdessen wird die Kategorie-
+// Farbe auf den deckenden Flächen-Grundton gemischt: der Untergrund ist damit
+// unabhängig vom Theme dunkel, die helle Flächen-Schrift erreicht auf allen
+// fünf Farben mindestens 8,8:1 (gedimmt mit --app-on-surface-muted 7,4:1).
+// Der farbige Rand hält die Kategorien auseinander. Der aktive Chip trägt die
+// volle Farbe mit passender Schrift (--cat-text, gesetzt in Game.vue) und hebt
+// sich über Rand, Schein und Vergrößerung ab.
 .bingo-category-chip {
   --cat-color: #666;
-  background: var(--cat-color);
-  color: #fff;
+  background: color-mix(in srgb, var(--cat-color) 30%, var(--app-surface-solid, rgb(20, 20, 24)));
+  color: var(--app-on-surface, #f5f5f5);
   padding: 6px 10px;
   text-align: center;
   border-radius: 6px;
   font-weight: 600;
   font-size: 0.85rem;
-  border: 2px solid transparent;
-  opacity: 0.5;
+  border: 2px solid color-mix(in srgb, var(--cat-color) 65%, transparent);
   transition:
-    opacity 0.15s ease,
+    background-color 0.15s ease,
+    color 0.15s ease,
     transform 0.1s ease,
     border-color 0.15s ease,
     box-shadow 0.15s ease;
-  text-shadow: 0 0 3px rgba(0, 0, 0, 0.4);
+  text-shadow: none;
 }
 .bingo-category-chip--dimmed {
-  opacity: 0.2;
+  background: color-mix(in srgb, var(--cat-color) 15%, var(--app-surface-solid, rgb(20, 20, 24)));
+  color: var(--app-on-surface-muted, #bdbdbd);
+  border-color: color-mix(in srgb, var(--cat-color) 35%, transparent);
 }
 .bingo-category-chip--active {
-  opacity: 1;
+  background: var(--cat-color);
+  color: var(--cat-text, #fff);
   transform: scale(1.05);
-  border-color: #fff;
+  border-color: var(--app-on-surface, #f5f5f5);
   box-shadow:
-    0 0 0 2px rgba(0, 0, 0, 0.4),
-    0 0 12px rgba(255, 255, 255, 0.55);
+    0 0 0 2px var(--app-surface-solid, rgb(20, 20, 24)),
+    0 0 12px color-mix(in srgb, var(--app-on-surface, #f5f5f5) 55%, transparent);
 }
 .bingo-phase-content {
   min-height: 44px;
@@ -304,14 +329,15 @@
 .bingo-team-eval-row__name {
   font-weight: 600;
 }
+// Nebentexte: gedämpfte Flächen-Schrift statt opacity (bleibt >= 4,5:1).
 .bingo-team-eval-row__answer {
-  opacity: 0.9;
+  color: var(--app-on-surface-muted, #bdbdbd);
   word-break: break-word;
 }
 .bingo-opponent__badge {
   margin-left: 4px;
   font-size: 0.75rem;
-  opacity: 0.85;
+  color: var(--app-on-surface-muted, #bdbdbd);
 }
 @media (max-width: 599px) {
   .bingo-category-chip {
@@ -324,7 +350,6 @@
   .bingo-team-eval-row__answer {
     grid-column: 1 / -1;
     font-size: 0.85rem;
-    opacity: 0.85;
   }
 }
 .bingo-team-label {
@@ -356,7 +381,9 @@
   transform: translateY(-50%);
   z-index: 2;
   background: var(--surface-bg, rgba(20, 20, 24, 0.72)) !important;
-  color: var(--app-on-accent, #fff);
+  // Pfeil auf der dunklen Fläche: Flächen-Schrift (--app-on-accent ist für
+  // die Akzent-Füllung gedacht und kann dunkel sein).
+  color: var(--app-on-surface, #f5f5f5);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
@@ -400,7 +427,7 @@
 }
 .bingo-opponent__name {
   font-size: 0.85rem;
-  opacity: 0.9;
+  color: var(--app-on-surface-muted, #bdbdbd);
   text-align: left;
   max-width: 140px;
   overflow: hidden;
@@ -429,6 +456,8 @@
   margin: 0 auto 20px;
   padding: 10px 15px;
   /* Gleiche Acryl-Fläche wie das Spielfeld/die Timelines. */
+  color: var(--app-on-surface, #f5f5f5);
+  text-shadow: none;
   background: var(--surface-bg);
   backdrop-filter: blur(var(--surface-blur)) saturate(150%);
   -webkit-backdrop-filter: blur(var(--surface-blur)) saturate(150%);
@@ -533,14 +562,15 @@
 }
 .year-edit-trigger {
   cursor: pointer;
-  color: rgba(255, 255, 255, 0.6);
+  // Vorher Weiß mit 60 % Deckkraft, auf hellen Themes unter 4,5:1.
+  color: var(--app-on-surface-muted, #bdbdbd);
   font-size: 0.85rem;
   border-bottom: 1px dashed rgba(255, 255, 255, 0.35);
   padding-bottom: 2px;
   transition: color 0.2s;
 }
 .year-edit-trigger:hover {
-  color: #fff;
+  color: var(--app-on-surface, #f5f5f5);
 }
 .year-edit-inline {
   display: flex;
@@ -584,15 +614,19 @@
   border: 1px solid var(--surface-border, #424242);
   border-radius: var(--surface-radius, 8px);
   padding: 15px;
+  color: var(--app-on-surface, #f5f5f5);
+  text-shadow: none;
   background: var(--surface-bg, #1e1e1e);
   backdrop-filter: blur(var(--surface-blur, 18px)) saturate(150%);
   -webkit-backdrop-filter: blur(var(--surface-blur, 18px)) saturate(150%);
   transition: all 0.3s;
 }
 
-/* Aktiver Spieler: Rahmen in Theme-Akzentfarbe … */
+/* Aktiver Spieler: Rahmen in Theme-Akzentfarbe … (Textvariante des Akzents,
+   weil der Rahmen den Zustand anzeigt und sich von der dunklen Fläche
+   mindestens 3:1 abheben muss; der reine Akzent schafft das nicht überall). */
 .player-timeline.active-player {
-  border: 3px solid var(--app-accent, #ff0000);
+  border: 3px solid var(--app-accent-text, #47c1d1);
 }
 /* … und als Fallback (Standard-/kein Theme) der animierte Regenbogen-Rahmen. */
 :root[data-default-theme="true"] .player-timeline.active-player {
@@ -671,7 +705,7 @@
   transform: translateY(-50%);
   z-index: 2;
   background: var(--surface-bg, rgba(20, 20, 24, 0.72)) !important;
-  color: var(--app-on-accent, #fff);
+  color: var(--app-on-surface, #f5f5f5);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
@@ -698,15 +732,23 @@
   min-width: var(--timeline-card-size);
   min-height: var(--timeline-card-size);
   flex-shrink: 0;
-  color: white;
+  /* Schriftfarbe passend zur Kartenfarbe (--card-text, inline aus Game.vue:
+     readableTextOn der Originalfarbe bzw. --app-on-accent im Theme-Modus).
+     Vorher fest Weiß, auf hellen Karten wie #00d2d3 nur 1,88:1. */
+  color: var(--card-text, #fff);
   display: flex;
   align-items: center;
   justify-content: center;
   /* Kartenfarbe kommt aus --card-color (inline gesetzt) und muss die globale
      Acryl-.q-card-Regel schlagen -> daher hier mit !important. */
   background: var(--card-color, #3d3d3d) !important;
-  border: 1px solid var(--card-color, #3d3d3d) !important;
-  box-shadow: 0 0 14px var(--card-color, #3d3d3d) !important;
+  /* WCAG 1.4.11: dunkle Kartenfarben auf dunkler Fläche. Rand und
+     Leuchtschein nehmen --card-edge (inline aus Game.vue): die Kartenfarbe,
+     bei dunklen Tönen wie #2c3e50 mit Weiß aufgehellt, bis sie gegen die
+     Acryl-Fläche (#141418 bis #3e3e42) mindestens 3:1 erreicht. Vorher lag
+     beides in der Kartenfarbe selbst und verschwand auf der Fläche. */
+  border: 2px solid var(--card-edge, var(--card-color, #3d3d3d)) !important;
+  box-shadow: 0 0 14px var(--card-edge, var(--card-color, #3d3d3d)) !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
   border-radius: 8px;
@@ -724,9 +766,10 @@
 .timeline-card-artist {
   font-size: clamp(0.62rem, 0.78vw, 0.95rem);
   font-weight: 500;
-  color: #fff;
+  /* Keine Abschwächung per opacity: sie würde den Kontrast unter 4,5:1
+     drücken. Die Rangfolge entsteht über Größe und Gewicht. */
+  color: var(--card-text, #fff);
   text-align: center;
-  opacity: 0.85;
   line-height: 1.15;
   max-width: 100%;
   overflow: hidden;
@@ -741,7 +784,7 @@
 .timeline-card-year {
   font-size: 1.9rem;
   font-weight: bold;
-  color: #fff;
+  color: var(--card-text, #fff);
   text-align: center;
   letter-spacing: 1px;
   line-height: 1;
@@ -749,9 +792,8 @@
 .timeline-card-title {
   font-size: clamp(0.6rem, 0.75vw, 0.9rem);
   font-weight: 400;
-  color: #fff;
+  color: var(--card-text, #fff);
   text-align: center;
-  opacity: 0.8;
   line-height: 1.15;
   max-width: 100%;
   overflow: hidden;
@@ -764,7 +806,10 @@
   height: var(--timeline-card-size);
   min-width: var(--timeline-card-size);
   min-height: var(--timeline-card-size);
-  border: 2px dashed var(--app-accent, #00bcd4);
+  /* Rand und Plus-Icon in der Textvariante des Akzents: Der Platz ist ein
+     Bedienelement und muss sich von der Fläche mindestens 3:1 abheben. */
+  border: 2px dashed var(--app-accent-text, #47c1d1);
+  color: var(--app-accent-text, #47c1d1);
   border-radius: 8px;
   display: flex;
   align-items: center;
@@ -777,8 +822,8 @@
 
 .card-slot:hover {
   background: rgba(255, 255, 255, 0.12);
-  border-color: var(--app-accent, #00e5ff);
-  box-shadow: 0 0 10px var(--app-accent, #00e5ff);
+  border-color: var(--app-accent-text, #47c1d1);
+  box-shadow: 0 0 10px var(--app-accent-text, #47c1d1);
   transform: scale(1.05);
 }
 
@@ -815,8 +860,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--app-on-bg, #888);
-  opacity: 0.7;
+  /* Liegt in der Spieler-Fläche: gedämpfte Flächen-Schrift statt
+     --app-on-bg mit opacity (auf hellen Themes dunkel auf dunkel). */
+  color: var(--app-on-surface-muted, #bdbdbd);
   font-style: italic;
   text-align: center;
   padding: 10px;
@@ -855,7 +901,7 @@
 /* ========== SETTINGS DIALOG ========== */
 .settings-dialog-card {
   min-width: 320px;
-  color: #fff;
+  color: var(--app-on-surface, #f5f5f5);
 }
 
 /* ========== SCORE MANAGE DIALOG ========== */
@@ -1220,6 +1266,8 @@
 .raffle-item {
   padding: 10px 16px;
   border-radius: var(--surface-radius, 12px);
+  color: var(--app-on-surface, #f5f5f5);
+  text-shadow: none;
   background: var(--surface-bg);
   border: 2px solid transparent;
   font-weight: 600;

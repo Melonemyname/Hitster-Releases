@@ -19,7 +19,8 @@ export default route(function (/* { store, ssrContext } */) {
     if (to.meta.requiresAuth) {
       const token = localStorage.getItem('hitster-auth-token')
       if (!token) {
-        return { name: 'login' }
+        // Ziel merken, damit es nach der Anmeldung dort weitergeht.
+        return { name: 'login', query: { redirect: to.fullPath } }
       }
     }
     if (to.meta.requiresAdmin) {

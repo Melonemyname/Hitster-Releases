@@ -9,7 +9,12 @@
  * Eine Version:
  * { id, value:'custom-<id>', label, cover:{kind:'preset'|'upload', ref},
  *   custom:true, synced:boolean, tracks:[{trackId,title,artist,year,url}],
- *   createdAt }
+ *   createdAt, updatedAt }
+ *
+ * Nur lokal (gehen nie an den Server, siehe useVersions):
+ *   pendingPush   Änderung noch nicht hochgeladen
+ *   pendingCreate noch nie auf dem Server angekommen (offline angelegt)
+ *   ownerId       Konto, dem eine synchronisierte Version gehört
  */
 
 const KEY = "hitster-custom-versions-v1";
@@ -30,6 +35,14 @@ export function writeCustomVersions(list) {
   } catch {
     /* Speicher nicht verfügbar / voll – ignorieren */
   }
+}
+
+// Alle account-synchronisierten Versionen vom Gerät entfernen (beim Abmelden
+// oder Kontowechsel). Gerätespezifische Versionen (synced:false) bleiben.
+export function removeSyncedCustomVersions() {
+  const list = readCustomVersions();
+  const rest = list.filter((v) => !v.synced);
+  if (rest.length !== list.length) writeCustomVersions(rest);
 }
 
 export function getCustomVersion(value) {

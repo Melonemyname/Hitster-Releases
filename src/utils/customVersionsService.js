@@ -18,7 +18,13 @@ function authHeaders(extra = {}) {
 
 async function handle(res) {
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Fehler (${res.status})`);
+  if (!res.ok) {
+    const err = new Error(data.message || data.error || `Fehler (${res.status})`);
+    // Status mitgeben: Der Aufrufer unterscheidet „Server lehnt ab" (4xx) von
+    // „gerade nicht erreichbar" (Netzwerkfehler, 5xx).
+    err.status = res.status;
+    throw err;
+  }
   return data;
 }
 

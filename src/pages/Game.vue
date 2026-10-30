@@ -1,5 +1,9 @@
 <template>
   <q-page class="game-page">
+    <!-- Seitenueberschrift nur fuer Screenreader: Die Spielansicht hat keine
+         sichtbare Titelzeile, ohne h1 fehlt Hilfsmitteln aber der Einstieg in
+         die Ueberschriften-Navigation (axe page-has-heading-one). -->
+    <h1 class="sr-only">{{ pageHeading }}</h1>
     <!-- ── Bingo-Modus: Runden-Flow (Etappen 3–7) ───────────────────────
          Der Server ist autoritativ (siehe server/rooms.js). Diese Ansicht
          spiegelt `bingoState.round` per Phase und liefert die Aktionen
@@ -14,9 +18,11 @@
           <div class="bingo-header">
             <!-- Beschriftung faellt unter 600px weg, das Icon bleibt (gleiches
                  Muster wie im Kopf der anderen Modi). -->
+            <!-- Kein festes Quasar-Grau (ca. 3:1 auf der Flaeche), sondern die
+                 gedaempfte Theme-Schrift mit mindestens 4,5:1. -->
             <q-btn
               flat
-              color="grey"
+              class="text-muted"
               icon="logout"
               aria-label="Zurück zur Lobby"
               @click="handleEndGame"
@@ -67,12 +73,18 @@
               >
                 Runde {{ bingoRound.roundNumber }}
               </q-chip>
+              <ActiveVersionsChip
+                :versions="activeVersionOptions"
+                square
+                dense
+              />
             </div>
             <q-btn
               round
               flat
               color="white"
               icon="info"
+              aria-label="Farben und Regeln"
               @click="showBingoLegend = true"
             >
               <q-tooltip>Farben &amp; Regeln</q-tooltip>
@@ -86,6 +98,7 @@
               flat
               color="white"
               icon="settings"
+              aria-label="Einstellungen"
               @click="showBingoSettingsDialog = true"
             >
               <q-tooltip>Einstellungen</q-tooltip>
@@ -111,7 +124,10 @@
                   bingoHighlightedCategoryIndex !== i &&
                   !bingoRevealAnimating,
               }"
-              :style="{ '--cat-color': bingoCategoryColorHex(cat.color) }"
+              :style="{
+                '--cat-color': bingoCategoryColorHex(cat.color),
+                '--cat-text': bingoCategoryTextHex(cat.color),
+              }"
             >
               {{ cat.shortLabel }}
             </div>
@@ -119,21 +135,12 @@
 
           <div class="bingo-phase-content">
             <!-- Sieg -->
+            <!-- Sieg: groß als Einblendung (BingoAnnouncement unten), hier
+                 nur ein Platzhalter, damit kein anderer Zweig greift. -->
             <template v-if="bingoWinners && bingoWinners.length">
-              <div class="text-h5 text-center q-mb-sm">
+              <div class="text-center text-body1">
                 <q-icon name="emoji_events" class="q-mr-sm" />
-                {{ bingoWinners.length > 1 ? "Geteilter Sieg!" : "Sieg!" }}
-              </div>
-              <div class="text-center text-body1 q-mb-sm">
-                {{ bingoWinnerNames.join(", ") }}
-              </div>
-              <div class="text-center">
-                <q-btn
-                  color="grey-7"
-                  icon="home"
-                  label="Zur Lobby"
-                  @click="handleEndGame"
-                />
+                Spiel beendet
               </div>
             </template>
 
@@ -181,9 +188,34 @@
                 <BingoAnswerInput
                   :category="bingoCurrentCategoryFull || bingoRound.category"
                   :model-value="bingoTeamAnswer"
-                  :disabled="!bingoIAmInATeam"
+                  :disabled="!bingoIAmInATeam || bingoMyAnswerConfirmed"
                   @update:model-value="onBingoTeamAnswerInput"
                 />
+              </div>
+              <!-- Abgabe: erst damit zählt das Team als fertig. Danach ist
+                   das Feld gesperrt, „Ändern" gibt es wieder frei. -->
+              <div v-if="bingoIAmInATeam" class="text-center q-mt-sm">
+                <q-btn
+                  v-if="!bingoMyAnswerConfirmed"
+                  color="positive"
+                  icon="send"
+                  label="Abgeben"
+                  :disable="!String(bingoTeamAnswer ?? '').trim()"
+                  @click="onBingoConfirmAnswer"
+                />
+                <template v-else>
+                  <span class="q-mr-sm">
+                    <q-icon name="check_circle" color="positive" class="q-mr-xs" />
+                    Abgegeben
+                  </span>
+                  <q-btn
+                    flat
+                    dense
+                    icon="edit"
+                    label="Ändern"
+                    @click="onBingoReopenAnswer"
+                  />
+                </template>
               </div>
               <div
                 class="row items-center justify-center q-mt-sm gap-md bingo-host-actions"
@@ -248,7 +280,7 @@
                     color="warning"
                     icon="skip_next"
                     size="sm"
-                    aria-label="Runde überspringen"
+                    aria-label="Skip: Runde überspringen"
                     @click="onBingoSkipRound"
                   >
                     <span class="gt-xs q-ml-sm">Skip</span>
@@ -306,10 +338,12 @@
               v-else-if="bingoRound.answersRevealed && bingoRound.songData"
             >
               <div class="text-center text-body1 q-mb-xs">
-                <strong>{{ bingoRound.songData.title || "Unbekannt" }}</strong>
-                — {{ bingoRound.songData.artist || "Unbekannt" }}
+                <strong>{{
+                  fmtTitle(bingoRound.songData.title) || "Unbekannt"
+                }}</strong>
+                von {{ fmtArtist(bingoRound.songData.artist) || "Unbekannt" }}
                 <span v-if="bingoRound.songData.year">
-                  ({{ bingoRound.songData.year }})
+                  ({{ fmtYears(bingoRound.songData) }})
                 </span>
               </div>
               <div class="text-center text-caption q-mb-sm">
@@ -344,9 +378,17 @@
               >
                 <q-icon name="touch_app" class="q-mr-xs" />
                 Wähle unten ein freies
+                <!-- Als Farbmarke statt als farbige Schrift: Lila oder Pink
+                     erreichen als Schrift auf der dunklen Flaeche nur 2 bis
+                     4:1. Auf der Kategorie-Farbe steht die Schrift dagegen
+                     immer lesbar (readableTextOn). -->
                 <strong
+                  class="q-px-xs rounded-borders"
                   :style="{
-                    color: bingoCategoryColorHex(bingoRound.category?.color),
+                    background: bingoCategoryColorHex(
+                      bingoRound.category?.color,
+                    ),
+                    color: bingoCategoryTextHex(bingoRound.category?.color),
                   }"
                   >Feld dieser Farbe</strong
                 >
@@ -423,6 +465,17 @@
             {{ songReadyCount }} / {{ songReadyTotal }} bereit
           </div>
         </div>
+        <div v-else-if="songPlayPromptUrl" class="bingo-song-open text-center">
+          <!-- Automatisches Öffnen vom Browser blockiert: per Klick abspielen. -->
+          <q-btn
+            color="primary"
+            size="lg"
+            icon="play_circle"
+            label="Jetzt abspielen"
+            aria-label="Song jetzt abspielen"
+            @click="playPromptedSong"
+          />
+        </div>
 
         <!-- Spielfeld-Acryl-Fläche: umschließt eigenes Feld + Gegner und reicht
              bis zum unteren Seitenrand. Das eigene Feld liegt zentriert oben in
@@ -467,6 +520,7 @@
                 <BingoCard
                   :cells="ownTeamCells"
                   :marks="ownTeamMarks"
+                  label="Eure Bingokarte"
                   :interactive="bingoIAmCorrectAndNeedsMark"
                   :pickable-color="
                     bingoIAmCorrectAndNeedsMark
@@ -537,7 +591,12 @@
                       </span>
                     </div>
                   </div>
-                  <BingoCard :cells="team.cells" :marks="team.marks" compact />
+                  <BingoCard
+                    :cells="team.cells"
+                    :marks="team.marks"
+                    :label="`Karte von ${team.name}`"
+                    compact
+                  />
                 </div>
               </div>
               <q-btn
@@ -561,6 +620,29 @@
         :bingos-to-win="bingoSettings.bingosToWin"
       />
 
+      <BingoAnnouncement :message="bingoAnnouncement" />
+
+      <!-- Sieg: bleibt stehen, „Zur Lobby" nur für den Host. -->
+      <BingoAnnouncement
+        :message="bingoWinnerMessage"
+        :title="bingoWinners && bingoWinners.length > 1 ? 'GETEILTER SIEG!' : 'SIEG!'"
+        icon="emoji_events"
+        large
+      >
+        <q-btn
+          v-if="multiplayerIsHost"
+          color="primary"
+          size="lg"
+          icon="home"
+          label="Zur Lobby"
+          @click="handleEndGame"
+        />
+        <div v-else class="text-body1">
+          <q-spinner size="20px" class="q-mr-sm" />
+          Warte auf den Host …
+        </div>
+      </BingoAnnouncement>
+
       <BingoBonusDialog
         v-model="showBingoBonusDialog"
         :opponent-teams="bingoOpponentTeamsForBonus"
@@ -570,8 +652,12 @@
 
       <!-- Bingo: Host-Einstellungen (Werkzeuge). Nur Host. Aktionsliste analog
            zu den anderen Modi + Unteransicht zum Korrigieren einzelner Kreuze. -->
+      <!-- Dialog-Namen: Quasar legt Attribute des q-dialog auf das
+           role="dialog"-Element, `aria-labelledby` zeigt dort auf die sichtbare
+           Ueberschrift im Kopf der Karte. -->
       <q-dialog
         v-model="showBingoSettingsDialog"
+        aria-labelledby="game-dlg-bingo-settings-title"
         @hide="bingoSettingsView = 'menu'"
       >
         <q-card class="settings-dialog-card">
@@ -582,9 +668,10 @@
               round
               dense
               icon="arrow_back"
+              aria-label="Zurück zum Menü"
               @click="bingoSettingsView = 'menu'"
             />
-            <div class="text-h6">
+            <div id="game-dlg-bingo-settings-title" class="text-h6">
               {{
                 bingoSettingsView === "correct"
                   ? "Kreuze korrigieren"
@@ -592,12 +679,19 @@
               }}
             </div>
             <q-space />
-            <q-btn v-close-popup flat round dense icon="close" />
+            <q-btn
+              v-close-popup
+              flat
+              round
+              dense
+              icon="close"
+              aria-label="Schließen"
+            />
           </q-card-section>
 
           <!-- Aktionsmenü -->
           <q-list v-if="bingoSettingsView === 'menu'">
-            <q-item-label header class="text-grey-7">
+            <q-item-label header class="text-muted">
               Aktionen (nur Host)
             </q-item-label>
 
@@ -628,7 +722,9 @@
               </q-item-section>
             </q-item>
 
-            <q-separator />
+            <!-- role="none": Ein Trenner (hr) ist in einer ARIA-Liste kein
+                 erlaubtes Kind (axe aria-required-children). -->
+            <q-separator role="none" :aria-orientation="null" />
 
             <q-item v-close-popup clickable @click="resetGameState">
               <q-item-section avatar>
@@ -652,7 +748,7 @@
 
           <!-- Korrektur-Ansicht: Team wählen, Felder togglen -->
           <q-card-section v-else-if="bingoSettingsView === 'correct'">
-            <div class="text-caption text-grey-7 q-mb-sm">
+            <div class="text-caption text-muted q-mb-sm">
               Team wählen, dann Felder antippen zum Setzen/Entfernen.
             </div>
             <q-select
@@ -669,6 +765,7 @@
               <BingoCard
                 :cells="bingoCorrectTeam.cells"
                 :marks="bingoCorrectTeam.marks"
+                label="Karte des gewählten Teams"
                 host-edit
                 @pick-cell="onBingoCorrectCell"
               />
@@ -696,6 +793,7 @@
             color="primary"
             icon="skip_next"
             outline
+            aria-label="Skip: Song überspringen"
             @click="manualSkipSong"
           >
             <span class="gt-xs q-ml-sm">Skip</span>
@@ -706,6 +804,7 @@
             color="warning"
             icon="skip_next"
             outline
+            aria-label="Skip anfragen"
             @click="guestRequestSkip"
           >
             <span class="gt-xs q-ml-sm">Skip anfragen</span>
@@ -762,6 +861,14 @@
               {{ multiplayerAudioMode === "host-only" ? "Nur Host" : "Alle" }}
             </q-tooltip>
           </q-chip>
+
+          <!-- Aktive Versionen, in jedem Modus (im Battle die aller
+               Spieler zusammen, pro Spieler steht sie an der Zeitleiste). -->
+          <ActiveVersionsChip
+            :versions="activeVersionOptions"
+            size="lg"
+            class="q-ml-sm"
+          />
 
           <!-- Draw-Buttons: Desktop inline im Header, mobil als fixe Leiste unten.
              Auf mobil per Teleport an <body>, sonst hielte der Header
@@ -858,21 +965,34 @@
                 class="q-ml-sm"
                 @click="openGuestSongUrl"
               />
+              <q-btn
+                v-else-if="songPlayPromptUrl"
+                color="primary"
+                icon="play_circle"
+                label="Jetzt abspielen"
+                aria-label="Song jetzt abspielen"
+                class="q-ml-sm"
+                @click="playPromptedSong"
+              >
+                <!-- Der Browser hat das automatische Öffnen blockiert (keine
+                     Nutzergeste, etwa wenn alle Geräte bereit sind). -->
+              </q-btn>
             </div>
           </Teleport>
         </div>
 
         <div class="game-info-right">
-          <!-- Info: Punkte & Einwände -->
+          <!-- Info: Spielregeln -->
           <q-btn
             round
             flat
             color="white"
             icon="info"
             size="md"
+            aria-label="Spielregeln"
             @click="showInfoDialog = true"
           >
-            <q-tooltip>Punkte &amp; Einwände</q-tooltip>
+            <q-tooltip>Spielregeln</q-tooltip>
           </q-btn>
           <!-- Einstellungsrad -->
           <q-btn
@@ -881,6 +1001,7 @@
             color="white"
             icon="settings"
             size="md"
+            aria-label="Einstellungen"
             @click="showSettingsDialog = true"
           >
             <q-tooltip>Einstellungen</q-tooltip>
@@ -888,50 +1009,79 @@
         </div>
       </div>
 
-      <!-- Info-Dialog: Punkte & Einwände -->
-      <q-dialog v-model="showInfoDialog">
+      <!-- Info-Dialog: Spielregeln (Sieg, Punkte, Einwände) -->
+      <q-dialog v-model="showInfoDialog" aria-labelledby="game-dlg-info-title">
         <q-card class="settings-dialog-card">
           <q-card-section class="bg-primary">
-            <div class="text-h6">Punkte &amp; Einwände</div>
+            <div id="game-dlg-info-title" class="text-h6">Spielregeln</div>
           </q-card-section>
           <q-card-section class="q-gutter-sm">
             <div class="text-subtitle2">Karte gewinnen</div>
             <div class="text-body2">
-              Ordne den Song chronologisch korrekt in deine Timeline ein → du
-              bekommst die Karte.
+              Ordne den Song chronologisch richtig in deine Zeitleiste ein, dann
+              bekommst du die Karte.
+            </div>
+            <div class="text-body2">
+              Die Startkarte hat ein zufälliges Jahr aus dem Zeitraum der
+              gewählten Versionen<template v-if="gameMode === 'battle'">
+                (im Battle aus deiner eigenen Version)</template
+              >.
+            </div>
+            <q-separator dark />
+            <div class="text-subtitle2">Sieg</div>
+            <div class="text-body2">
+              Geprüft wird erst am Ende einer vollen Runde, wenn alle gleich oft
+              dran waren. Hat dann mindestens ein Spieler 10 oder mehr Karten
+              und liegt genau einer mit den meisten Karten allein vorn, hat er
+              gewonnen. Teilen sich mehrere die meisten Karten, wird
+              weitergespielt, bis einer allein vorn liegt.
+            </div>
+            <div class="text-body2">
+              Wer am Ende mindestens 10 Karten hat, bekommt
+              <b>3 Punkte</b> extra. Gehen die Songs aus, gewinnen alle mit den
+              meisten Karten.
+            </div>
+            <div class="text-caption text-muted">
+              Punkte entscheiden nicht über den Sieg. Sie werden angezeigt und
+              in der Statistik gezählt.
             </div>
             <q-separator dark />
             <div class="text-subtitle2">Punkte (Bonus fürs Raten)</div>
+            <div class="text-caption text-muted">
+              Den Bonus gibt es immer, auch wenn die Karte falsch eingeordnet
+              wurde.
+            </div>
             <template v-if="gameMode === 'film'">
               <div class="text-body2">
-                • Film/Serie + Titel + Künstler + Jahr → <b>4 Punkte</b>
+                • Film/Serie, Titel, Künstler und Jahr → <b>4 Punkte</b>
               </div>
               <div class="text-body2">
-                • Film/Serie + Titel + Künstler → <b>3 Punkte</b>
+                • Film/Serie, Titel und Künstler → <b>3 Punkte</b>
               </div>
               <div class="text-body2">
-                • Film/Serie + Titel + Jahr → <b>3 Punkte</b>
+                • Film/Serie, Titel und Jahr → <b>3 Punkte</b>
               </div>
               <div class="text-body2">
-                • Film/Serie + Künstler + Jahr → <b>3 Punkte</b>
+                • Film/Serie, Künstler und Jahr → <b>3 Punkte</b>
               </div>
               <div class="text-body2">
-                • Film/Serie + Jahr → <b>2 Punkte</b>
+                • Film/Serie und Jahr → <b>2 Punkte</b>
               </div>
               <div class="text-body2">
-                • Film/Serie richtig → <b>1 Punkt</b>
+                • Nur Film/Serie richtig → <b>1 Punkt</b>
               </div>
-              <div class="text-caption text-grey-6 q-mt-xs">
-                Ohne richtigen Film/Serie gelten die Normal-Modus-Regeln:
-                Titel+Künstler+Jahr → 3, Titel+Künstler → 1, nur Jahr → 1.
+              <div class="text-caption text-muted q-mt-xs">
+                Ohne richtigen Film oder Serie gilt die Wertung des normalen
+                Modus: Titel, Künstler und Jahr → 3, Titel und Künstler → 1,
+                nur Jahr → 1.
               </div>
             </template>
             <template v-else>
               <div class="text-body2">
-                • Titel + Künstler + Jahr exakt → <b>3 Punkte</b>
+                • Titel, Künstler und Jahr exakt → <b>3 Punkte</b>
               </div>
               <div class="text-body2">
-                • Titel + Künstler richtig → <b>1 Punkt</b>
+                • Titel und Künstler richtig → <b>1 Punkt</b>
               </div>
               <div class="text-body2">• Nur Jahr exakt → <b>1 Punkt</b></div>
             </template>
@@ -943,31 +1093,46 @@
               <q-separator dark />
               <div class="text-subtitle2">Einwände</div>
               <div class="text-body2">
-                • Start: <b>3 Einwände</b> pro Spieler.
+                • Zu Beginn hat jeder Spieler <b>3 Einwände</b>.
               </div>
+              <div class="text-body2">
+                • Glaubst du, die Karte liegt falsch, legst du Einwand ein. Das
+                kostet einen Einwand. Jeder, der einwendet, legt die Karte in
+                die Zeitleiste des aktiven Spielers, das Spiel prüft.
+              </div>
+              <div class="text-body2">
+                • Lag der aktive Spieler falsch, bekommt ein Einwender mit
+                richtiger Lösung die Karte in seine eigene Zeitleiste. Sind es
+                mehrere, wird einer ausgelost.
+              </div>
+              <div class="text-body2">
+                • Wer richtig eingewendet und die Karte nicht bekommen hat,
+                bekommt seinen Einwand zurück, auch wenn der aktive Spieler
+                ebenfalls richtig lag.
+              </div>
+              <div class="text-body2">
+                • Wird der Song während eines Einwands übersprungen, gibt es
+                alle eingesetzten Einwände zurück.
+              </div>
+              <div class="text-subtitle2 q-mt-sm">Neue Einwände fürs Raten</div>
               <template v-if="gameMode === 'film'">
                 <div class="text-body2">
-                  • Film/Serie + Titel + Künstler + Jahr →
-                  <b>+2 Einwände</b>.
+                  • Film/Serie, Titel, Künstler und Jahr →
+                  <b>2 Einwände</b>
                 </div>
                 <div class="text-body2">
-                  • Film/Serie + Titel + Künstler → <b>+1 Einwand</b>.
+                  • Film/Serie, Titel und Künstler → <b>1 Einwand</b>
                 </div>
                 <div class="text-body2">
-                  • Film/Serie + Jahr → <b>+1 Einwand</b>.
+                  • Film/Serie und Jahr → <b>1 Einwand</b>
                 </div>
                 <div class="text-body2">
-                  • Ohne Film/Serie: Titel + Künstler beide korrekt →
-                  <b>+1 Einwand</b>.
+                  • Ohne Film/Serie: Titel und Künstler richtig →
+                  <b>1 Einwand</b>
                 </div>
               </template>
               <div v-else class="text-body2">
-                • Titel + Künstler beide korrekt geraten → <b>+1 Einwand</b>.
-              </div>
-              <div class="text-body2">
-                • Ein Einwand kostet 1 Token. Wer korrekt einwendet, aber im
-                Number-Picker die Karte nicht bekommt, erhält den Einwand
-                zurück.
+                • Titel und Künstler richtig geraten → <b>1 Einwand</b>
               </div>
             </template>
           </q-card-section>
@@ -978,18 +1143,35 @@
       </q-dialog>
 
       <!-- Einstellungen Dialog -->
-      <q-dialog v-model="showSettingsDialog">
+      <q-dialog
+        v-model="showSettingsDialog"
+        aria-labelledby="game-dlg-settings-title"
+      >
         <q-card class="settings-dialog-card">
           <q-card-section class="bg-primary row items-center">
-            <div class="text-h6">Einstellungen</div>
+            <div id="game-dlg-settings-title" class="text-h6">Einstellungen</div>
             <q-space />
-            <q-btn v-close-popup flat round dense icon="close" />
+            <q-btn
+              v-close-popup
+              flat
+              round
+              dense
+              icon="close"
+              aria-label="Schließen"
+            />
           </q-card-section>
+          <!-- Trenner tragen role="none" und der Audio-Block role="listitem":
+               In einer ARIA-Liste sind nur Listeneintraege erlaubt, sonst
+               meldet axe aria-required-children. -->
           <q-list>
-            <q-item-label header class="text-grey-7"> Aktionen </q-item-label>
+            <q-item-label header class="text-muted"> Aktionen </q-item-label>
 
             <template v-if="!multiplayerMode || multiplayerIsHost">
-              <q-item v-close-popup clickable @click="openSaveSessionDialog">
+              <q-item
+                v-close-popup
+                clickable
+                @click="openSaveSessionDialog()"
+              >
                 <q-item-section avatar>
                   <q-icon color="primary" name="save" />
                 </q-item-section>
@@ -1003,7 +1185,7 @@
                 <q-item-section>Spielstand laden</q-item-section>
               </q-item>
 
-              <q-separator />
+              <q-separator role="none" :aria-orientation="null" />
 
               <q-item
                 v-close-popup
@@ -1015,9 +1197,9 @@
                   <q-icon color="primary" name="delete" />
                 </q-item-section>
                 <q-item-section>
-                  History löschen
+                  Gespielte Songs zurücksetzen
                   <q-item-label caption>
-                    Löscht alle Einträge aus localStorage
+                    Bereits gespielte Songs können wieder gezogen werden
                   </q-item-label>
                 </q-item-section>
               </q-item>
@@ -1032,7 +1214,7 @@
                 </q-item-section>
               </q-item>
 
-              <q-separator />
+              <q-separator role="none" :aria-orientation="null" />
 
               <q-item v-close-popup clickable @click="openManualCardDialog">
                 <q-item-section avatar>
@@ -1041,7 +1223,7 @@
                 <q-item-section>
                   Karte manuell hinzufügen
                   <q-item-label caption>
-                    Direkt in die Timeline einsortieren
+                    Direkt in die Zeitleiste einsortieren
                   </q-item-label>
                 </q-item-section>
               </q-item>
@@ -1062,12 +1244,14 @@
                 </q-item-section>
               </q-item>
 
-              <q-separator />
+              <q-separator role="none" :aria-orientation="null" />
             </template>
 
             <!-- Audio-Modus (nur im Multiplayer sichtbar, nur Host kann ändern) -->
-            <div v-if="multiplayerMode" class="q-px-md q-py-sm">
-              <div class="text-caption text-grey-7 q-mb-xs">Audio-Modus</div>
+            <div v-if="multiplayerMode" role="listitem" class="q-px-md q-py-sm">
+              <div id="game-audio-mode-label" class="text-caption text-muted q-mb-xs">
+                Audio-Modus
+              </div>
               <q-btn-toggle
                 v-model="multiplayerAudioMode"
                 :options="[
@@ -1079,6 +1263,8 @@
                 outline
                 size="sm"
                 class="full-width"
+                role="group"
+                aria-labelledby="game-audio-mode-label"
                 @update:model-value="
                   (val) => {
                     if (multiplayerIsHost)
@@ -1088,13 +1274,13 @@
               />
               <div
                 v-if="!multiplayerIsHost"
-                class="text-caption text-grey-7 q-mt-xs"
+                class="text-caption text-muted q-mt-xs"
               >
                 Nur der Host kann den Modus ändern
               </div>
             </div>
 
-            <q-separator />
+            <q-separator role="none" :aria-orientation="null" />
 
             <q-item v-close-popup clickable @click="handleEndGame">
               <q-item-section avatar>
@@ -1109,10 +1295,16 @@
       </q-dialog>
 
       <!-- Punkte / Einwände verwalten Dialog -->
-      <q-dialog v-model="showScoreManageDialog" persistent>
+      <q-dialog
+        v-model="showScoreManageDialog"
+        persistent
+        aria-labelledby="game-dlg-score-title"
+      >
         <q-card style="min-width: 400px">
           <q-card-section class="bg-primary">
-            <div class="text-h6">Punkte / Einwände verwalten</div>
+            <div id="game-dlg-score-title" class="text-h6">
+              Punkte / Einwände verwalten
+            </div>
           </q-card-section>
 
           <q-card-section class="score-manage-form">
@@ -1170,7 +1362,13 @@
               <span>
                 {{ scoreManageAmount || 1 }}
                 {{
-                  scoreManageType === "points" ? "Punkt(e)" : "Einwand/Einwände"
+                  scoreManageType === "points"
+                    ? Number(scoreManageAmount || 1) === 1
+                      ? "Punkt"
+                      : "Punkte"
+                    : Number(scoreManageAmount || 1) === 1
+                      ? "Einwand"
+                      : "Einwände"
                 }}
                 {{ scoreManageAction === "add" ? "hinzufügen" : "entfernen" }}
                 für
@@ -1194,12 +1392,18 @@
       </q-dialog>
 
       <!-- Manuell Karte hinzufügen Dialog -->
-      <q-dialog v-model="showManualCardDialog" persistent>
+      <q-dialog
+        v-model="showManualCardDialog"
+        persistent
+        aria-labelledby="game-dlg-manual-card-title"
+      >
         <q-card style="min-width: 400px">
           <q-card-section class="bg-primary">
-            <div class="text-h6">Karte manuell hinzufügen</div>
+            <div id="game-dlg-manual-card-title" class="text-h6">
+              Karte manuell hinzufügen
+            </div>
             <div class="text-subtitle2">
-              Wird chronologisch in die Timeline eingeordnet
+              Wird chronologisch in die Zeitleiste eingeordnet
             </div>
           </q-card-section>
 
@@ -1248,17 +1452,23 @@
       </q-dialog>
 
       <!-- Rateformular Dialog -->
-      <q-dialog v-model="showGuessDialog" persistent>
+      <!-- Beide Varianten tragen dieselbe Titel-id, es ist immer nur eine
+           gerendert. -->
+      <q-dialog
+        v-model="showGuessDialog"
+        persistent
+        aria-labelledby="game-dlg-guess-title"
+      >
         <q-card style="min-width: 400px">
           <!-- Host beobachtet Gast: Read-only-Ansicht -->
           <template v-if="isHostWatchingGuestGuess">
             <q-card-section class="bg-primary">
-              <div class="text-h6">
+              <div id="game-dlg-guess-title" class="text-h6">
                 {{ getGuessDialogSubtitle() }} rät gerade...
               </div>
             </q-card-section>
             <q-card-section>
-              <div class="text-caption text-grey-7 q-mb-sm">Live-Eingabe:</div>
+              <div class="text-caption text-muted q-mb-sm">Live-Eingabe:</div>
               <div>
                 <q-icon name="music_note" /> Titel:
                 <strong>{{ activeGuessDisplay.title || "—" }}</strong>
@@ -1281,7 +1491,7 @@
           <!-- Eigener Zug: Interaktives Rateformular -->
           <template v-else>
             <q-card-section class="bg-primary">
-              <div class="text-h6">Song raten</div>
+              <div id="game-dlg-guess-title" class="text-h6">Song raten</div>
               <div class="text-subtitle2">
                 {{ getGuessDialogSubtitle() }}
               </div>
@@ -1289,15 +1499,34 @@
 
             <q-card-section>
               <div class="text-body2 q-mb-md">
-                Der Song wurde in Spotify geöffnet. Höre ihn dir an und rate:
+                <template v-if="songOpenedForGuess">
+                  Der Song wurde in Spotify geöffnet. Höre ihn dir an und rate:
+                </template>
+                <template v-else-if="pendingSongUrl && songReadyConfirmed">
+                  Der Song startet, sobald alle bereit sind. Höre ihn dir an
+                  und rate:
+                </template>
+                <template v-else>Höre dir den Song an und rate:</template>
               </div>
+              <!-- Der Dialog ist persistent und verdeckt den „Song öffnen“-
+                   Knopf in der Kopfleiste, deshalb hier ein eigener. -->
+              <q-btn
+                v-if="!songOpenedForGuess && canOpenSongFromGuess"
+                flat
+                no-caps
+                color="primary"
+                icon="open_in_new"
+                label="Song öffnen"
+                class="q-mb-md"
+                @click="openSongFromGuess"
+              />
 
               <q-input
                 v-model="guessedTitle"
-                label="Song Titel"
+                label="Songtitel"
                 outlined
                 class="q-mb-md"
-                hint="Optional - für Bonuspunkte"
+                hint="Optional, für Bonuspunkte"
               />
 
               <q-input
@@ -1305,16 +1534,16 @@
                 label="Künstler"
                 outlined
                 class="q-mb-md"
-                hint="Optional - für Bonuspunkte"
+                hint="Optional, für Bonuspunkte"
               />
 
               <q-input
                 v-model.number="guessedYear"
                 type="number"
-                label="Jahr (optional)"
+                label="Jahr"
                 outlined
                 :class="gameMode === 'film' ? 'q-mb-md' : ''"
-                hint="Optional - für Bonuspunkte"
+                hint="Optional, für Bonuspunkte"
               />
 
               <q-input
@@ -1322,7 +1551,7 @@
                 v-model="guessedMovie"
                 label="Film / Serie"
                 outlined
-                hint="Optional - für Bonuspunkte"
+                hint="Optional, für Bonuspunkte"
               />
             </q-card-section>
 
@@ -1349,11 +1578,14 @@
       <q-dialog
         :model-value="isMyGuestGuessTurn"
         persistent
+        aria-labelledby="game-dlg-guest-guess-title"
         @update:model-value="() => {}"
       >
         <q-card style="min-width: 400px">
           <q-card-section class="bg-primary">
-            <div class="text-h6">Song raten – dein Zug!</div>
+            <div id="game-dlg-guest-guess-title" class="text-h6">
+              Song raten: Du bist dran!
+            </div>
             <div class="text-subtitle2">Tippe deine Schätzung ein</div>
           </q-card-section>
 
@@ -1390,36 +1622,36 @@
 
           <q-card-section>
             <div class="text-body2 q-mb-md">
-              Höre den Song an und rate (optional – für Bonuspunkte):
+              Höre dir den Song an und rate:
             </div>
             <q-input
               v-model="guestGuessTitle"
-              label="Song Titel"
+              label="Songtitel"
               outlined
               class="q-mb-md"
-              hint="Optional"
+              hint="Optional, für Bonuspunkte"
             />
             <q-input
               v-model="guestGuessArtist"
               label="Künstler"
               outlined
               class="q-mb-md"
-              hint="Optional"
+              hint="Optional, für Bonuspunkte"
             />
             <q-input
               v-model.number="guestGuessYear"
               type="number"
-              label="Jahr (optional)"
+              label="Jahr"
               outlined
               :class="gameMode === 'film' ? 'q-mb-md' : ''"
-              hint="Optional"
+              hint="Optional, für Bonuspunkte"
             />
             <q-input
               v-if="gameMode === 'film'"
               v-model="guestGuessMovie"
               label="Film / Serie"
               outlined
-              hint="Optional"
+              hint="Optional, für Bonuspunkte"
             />
           </q-card-section>
           <q-card-actions align="right" class="q-px-md q-pb-md">
@@ -1444,11 +1676,12 @@
       <q-dialog
         :model-value="showGuestGuessReadOnly"
         persistent
+        aria-labelledby="game-dlg-guest-readonly-title"
         @update:model-value="() => {}"
       >
         <q-card style="min-width: 340px">
           <q-card-section class="bg-primary">
-            <div class="text-h6">
+            <div id="game-dlg-guest-readonly-title" class="text-h6">
               {{
                 playerTimelines[guestSyncState.activeGuessPlayerIndex]?.name ||
                 "Jemand"
@@ -1457,7 +1690,7 @@
             </div>
           </q-card-section>
           <q-card-section>
-            <div class="text-caption text-grey-7 q-mb-sm">Live-Eingabe:</div>
+            <div class="text-caption text-muted q-mb-sm">Live-Eingabe:</div>
             <div>
               <q-icon name="music_note" /> Titel:
               <strong>{{ activeGuessDisplay.title || "—" }}</strong>
@@ -1479,11 +1712,17 @@
       </q-dialog>
 
       <!-- Einwand: Opt-in-Fenster (10 Sek) -->
-      <q-dialog v-model="objectionOptInActive" persistent>
+      <q-dialog
+        v-model="objectionOptInActive"
+        persistent
+        aria-labelledby="game-dlg-objection-title"
+      >
         <q-card style="min-width: 420px">
           <q-card-section class="bg-primary row items-center no-wrap">
             <div>
-              <div class="text-h6">Einwand möglich</div>
+              <div id="game-dlg-objection-title" class="text-h6">
+                Einwand möglich
+              </div>
               <div class="text-subtitle2">
                 Alle außer dem aktuellen Spieler können einwenden
               </div>
@@ -1492,6 +1731,7 @@
             <q-circular-progress
               show-value
               :value="(objectionOptInCountdown / 10) * 100"
+              :aria-label="`Noch ${objectionOptInCountdown} Sekunden für Einwände`"
               size="48px"
               :thickness="0.2"
               color="white"
@@ -1520,7 +1760,8 @@
                     player.name
                   }}</strong>
                   <q-chip dense class="q-ml-sm objection-optin__chip">
-                    {{ player.objections }} Einwände
+                    {{ player.objections }}
+                    {{ player.objections === 1 ? "Einwand" : "Einwände" }}
                   </q-chip>
                 </div>
                 <q-btn
@@ -1544,8 +1785,8 @@
               class="text-caption q-mt-sm"
               style="opacity: 0.7"
             >
-              Der Host startet die Einwandphase (oder sie startet automatisch
-              nach Ablauf der Zeit).
+              Der Host schließt das Fenster, sonst schließt es sich nach
+              Ablauf der Zeit von selbst.
             </div>
           </q-card-section>
 
@@ -1553,8 +1794,17 @@
             v-if="!multiplayerMode || multiplayerIsHost"
             align="right"
           >
+            <!-- Ohne Anmeldung gibt es keine Einwandphase. Der Knopf hieß
+                 trotzdem immer „Einwandphase starten“, auch wenn niemand
+                 einwenden wollte; er löst dann einfach die Karte auf. -->
             <q-btn
-              label="Einwandphase starten"
+              :label="
+                objectionOptIns.length === 0
+                  ? 'Kein Einwand, weiter'
+                  : objectionOptIns.length === 1
+                    ? 'Einwand platzieren'
+                    : `${objectionOptIns.length} Einwände platzieren`
+              "
               color="primary"
               @click="closeOptInWindow"
             />
@@ -1562,7 +1812,7 @@
         </q-card>
       </q-dialog>
 
-      <!-- Number-Picker: Auslosung bei mehreren korrekten Einwänden -->
+      <!-- Auslosung bei mehreren korrekten Einwänden -->
       <div v-if="objectionRaffleActive" class="feedback-overlay">
         <div class="feedback-dialog">
           <div class="text-h6 q-mb-xs">Mehrere korrekte Einwände!</div>
@@ -1639,7 +1889,9 @@
                   icon="gavel"
                 >
                   {{ player.objections
-                  }}<span class="gt-xs">&nbsp;Einwände</span>
+                  }}<span class="gt-xs">&nbsp;{{
+                    player.objections === 1 ? "Einwand" : "Einwände"
+                  }}</span>
                 </q-chip>
                 <q-chip
                   color="green"
@@ -1651,7 +1903,9 @@
                 </q-chip>
                 <q-chip color="primary" text-color="white" icon="style">
                   {{ player.cards.length
-                  }}<span class="gt-xs">&nbsp;Karten</span>
+                  }}<span class="gt-xs">&nbsp;{{
+                    player.cards.length === 1 ? "Karte" : "Karten"
+                  }}</span>
                 </q-chip>
               </div>
             </div>
@@ -1663,7 +1917,8 @@
                 icon="emoji_events"
                 size="lg"
               >
-                {{ player.points || 0 }} Punkte
+                {{ player.points || 0 }}
+                {{ (player.points || 0) === 1 ? "Punkt" : "Punkte" }}
               </q-chip>
             </div>
             <div class="timeline-header-actions">
@@ -1676,6 +1931,7 @@
                 color="primary"
                 icon="refresh"
                 class="q-mb-md"
+                aria-label="Erste Karte neu laden"
                 :disable="loadingFirstCard[index]"
                 style="margin-left: auto"
                 @click="reloadFirstCard(index)"
@@ -1704,7 +1960,10 @@
               @scroll.passive="updateTimelineScrollState(index)"
             >
               <div class="timeline-cards-inner">
-                <!-- Platzhalter vor der ersten Karte -->
+                <!-- Platzhalter vor der ersten Karte. Die Plus-Felder sind
+                     reine divs; role/tabindex und Enter/Leertaste machen sie
+                     per Tastatur bedienbar (WCAG 2.1.1). Die Tastatur loest
+                     denselben Klick aus, die Logik bleibt an einer Stelle. -->
                 <div
                   v-if="
                     canPlaceCards &&
@@ -1722,11 +1981,16 @@
                         currentObjectionPlayerIndex === guestSlotIndex))
                   "
                   class="card-slot"
+                  role="button"
+                  tabindex="0"
+                  :aria-label="cardSlotLabel(player.cards, 0)"
                   @click="
                     multiplayerMode && !multiplayerIsHost
                       ? guestPlaceCard(index, 0)
                       : placeCard(index, 0)
                   "
+                  @keydown.enter.prevent="$event.currentTarget.click()"
+                  @keydown.space.prevent="$event.currentTarget.click()"
                 >
                   <q-icon name="add" size="xl" />
                 </div>
@@ -1738,11 +2002,15 @@
                 >
                   <q-card
                     class="timeline-card"
-                    :style="{ '--card-color': cardColor(card) }"
+                    :style="{
+                      '--card-color': cardColor(card),
+                      '--card-text': cardTextColor(card),
+                      '--card-edge': cardEdgeColor(card),
+                    }"
                   >
                     <q-card-section class="timeline-card-content">
                       <div class="timeline-card-artist">
-                        {{ card.artist }}
+                        {{ fmtArtist(card.artist) }}
                       </div>
                       <div class="timeline-card-year-wrapper">
                         <div class="timeline-card-year">
@@ -1750,7 +2018,7 @@
                         </div>
                       </div>
                       <div class="timeline-card-title">
-                        {{ card.title }}
+                        {{ fmtTitle(card.title) }}
                       </div>
                     </q-card-section>
                   </q-card>
@@ -1773,11 +2041,16 @@
                           currentObjectionPlayerIndex === guestSlotIndex))
                     "
                     class="card-slot"
+                    role="button"
+                    tabindex="0"
+                    :aria-label="cardSlotLabel(player.cards, cardIndex + 1)"
                     @click="
                       multiplayerMode && !multiplayerIsHost
                         ? guestPlaceCard(index, cardIndex + 1)
                         : placeCard(index, cardIndex + 1)
                     "
+                    @keydown.enter.prevent="$event.currentTarget.click()"
+                    @keydown.space.prevent="$event.currentTarget.click()"
                   >
                     <q-icon name="add" size="xl" />
                   </div>
@@ -1821,13 +2094,28 @@
       <transition name="fade">
         <div v-if="showFeedback" class="feedback-overlay">
           <div class="feedback-dialog">
+            <!-- Hat ein Einwender die Karte bekommen, lag der aktive Spieler
+                 falsch. „Richtig!" über „X hat falsch eingeordnet." wäre
+                 widersprüchlich, deshalb eine eigene Überschrift. -->
             <q-icon
-              :name="feedbackCorrect ? 'check_circle' : 'cancel'"
+              :name="
+                objectionWinnerName
+                  ? 'gavel'
+                  : feedbackCorrect
+                    ? 'check_circle'
+                    : 'cancel'
+              "
               color="primary"
               size="64px"
             />
             <div class="text-h6 q-mt-md">
-              {{ feedbackCorrect ? "Richtig!" : "Falsch!" }}
+              {{
+                objectionWinnerName
+                  ? "Einwand erfolgreich!"
+                  : feedbackCorrect
+                    ? "Richtig!"
+                    : "Falsch!"
+              }}
             </div>
             <div class="text-body1 q-mt-sm">
               {{ feedbackMessage }}
@@ -1866,7 +2154,7 @@
                 color="info"
                 text-color="white"
               >
-                Jahr: {{ currentCard.year }}
+                Jahr: {{ fmtYears(currentCard) }}
               </q-chip>
               <q-chip
                 v-if="gameMode === 'film' && guessResults.movieCorrect !== null"
@@ -1880,26 +2168,27 @@
             <div v-if="currentCard" class="q-mt-md text-body2">
               <div>
                 <strong>Richtiger Titel:</strong>
-                {{ currentCard.title || "Unbekannt" }}
+                {{ fmtTitle(currentCard.title) || "Unbekannt" }}
               </div>
               <div>
                 <strong>Richtiger Künstler:</strong>
-                {{ currentCard.artist || "Unbekannt" }}
+                {{ fmtArtist(currentCard.artist) || "Unbekannt" }}
               </div>
               <div v-if="gameMode === 'film' && currentCard.movie">
                 <strong>Richtiger Film/Serie:</strong>
-                {{ currentCard.movie }}
+                {{ fmtTitle(currentCard.movie) }}
               </div>
             </div>
 
             <div class="feedback-countdown q-mt-md">
               <q-circular-progress
                 :value="feedbackCountdown * 20"
+                :aria-label="`Weiter in ${feedbackCountdown} Sekunden`"
                 size="36px"
                 color="primary"
                 track-color="grey-8"
               />
-              <span class="q-ml-sm text-grey-5" style="font-size: 0.85rem">
+              <span class="q-ml-sm text-muted" style="font-size: 0.85rem">
                 {{ `Weiter in ${feedbackCountdown}s` }}
               </span>
             </div>
@@ -1919,17 +2208,29 @@
       <!-- Das Einwandfeld entfällt, Einwand erfolgt direkt über die Plus-Slots in der Timeline wie beim normalen Raten. -->
 
       <!-- Sieg Dialog -->
-      <q-dialog v-model="showVictoryDialog" persistent>
+      <q-dialog
+        v-model="showVictoryDialog"
+        persistent
+        aria-labelledby="game-dlg-victory-title"
+      >
         <q-card style="min-width: 500px">
-          <q-card-section class="bg-positive text-white text-center">
-            <div class="text-h4">Sieg!</div>
+          <!-- Weisse Schrift kam auf dem Erfolgs-Gruen nur auf 2,6:1, die
+               Schriftfarbe richtet sich deshalb nach der Flaeche. -->
+          <q-card-section
+            class="bg-positive text-center"
+            :style="{ color: onPositiveText }"
+          >
+            <div id="game-dlg-victory-title" class="text-h4">Sieg!</div>
           </q-card-section>
 
+          <!-- Keine festen Grautoene: text-grey-9 war fast schwarz auf der
+               dunklen Karte, text-grey-7 kam auf rund 3:1. Die Zeile erbt jetzt
+               die Flaechen-Schrift, die Unterzeile ist gedaempft. -->
           <q-card-section class="text-center q-pa-lg">
-            <div class="text-h5 q-mb-md text-grey-9">
+            <div class="text-h5 q-mb-md">
               <strong>{{ winnerName }}</strong> {{ victoryHeadline }}
             </div>
-            <div class="text-h6 text-grey-7">
+            <div class="text-h6 text-muted">
               {{ victorySubline }}
             </div>
           </q-card-section>
@@ -1944,7 +2245,7 @@
               @click="openRestartDialog"
             />
             <q-btn
-              color="grey-7"
+              class="text-muted"
               :label="multiplayerMode ? 'Zur Lobby' : 'Spiel beenden'"
               icon="close"
               size="lg"
@@ -1955,20 +2256,25 @@
         </q-card>
       </q-dialog>
 
-      <q-dialog v-model="showRestartDialog" persistent>
+      <q-dialog
+        v-model="showRestartDialog"
+        persistent
+        aria-labelledby="game-dlg-restart-title"
+      >
         <q-card style="min-width: 460px">
           <q-card-section class="bg-primary">
-            <div class="text-h6">Neue Runde starten</div>
+            <div id="game-dlg-restart-title" class="text-h6">
+              Neue Runde starten
+            </div>
           </q-card-section>
           <q-card-section>
-            Wie möchtest du die nächste Runde starten?
+            Wie soll es weitergehen?
           </q-card-section>
           <q-card-actions class="q-pa-md restart-actions">
             <q-btn
-              class="full-width"
+              class="full-width text-muted"
               flat
-              color="grey-7"
-              :label="multiplayerMode ? 'Zur Lobby' : 'Nein, neues Spiel'"
+              :label="multiplayerMode ? 'Zur Lobby' : 'Neues Spiel'"
               @click="restartAsNewGame"
             />
             <q-btn
@@ -1976,23 +2282,26 @@
               class="full-width"
               flat
               color="secondary"
-              label="Neue Namen + Punkte"
+              label="Neue Namen, Punkte behalten"
               @click="restartWithNewNamesKeepingScores"
             />
             <q-btn
               class="full-width"
               color="primary"
-              label="Ja, gleiche Spieler + Punkte"
+              label="Gleiche Spieler und Punkte"
               @click="restartKeepingPlayersAndScores"
             />
           </q-card-actions>
         </q-card>
       </q-dialog>
 
-      <q-dialog v-model="showLoadSessionDialog">
+      <q-dialog
+        v-model="showLoadSessionDialog"
+        aria-labelledby="game-dlg-load-title"
+      >
         <q-card style="min-width: 420px">
           <q-card-section class="bg-primary">
-            <div class="text-h6">Spielstand laden</div>
+            <div id="game-dlg-load-title" class="text-h6">Spielstand laden</div>
           </q-card-section>
           <q-card-section>
             <div class="q-mb-md text-body2">
@@ -2002,7 +2311,7 @@
           <q-card-actions align="right" class="q-pa-md">
             <q-btn
               flat
-              color="grey-7"
+              class="text-muted"
               label="Abbrechen"
               @click="showLoadSessionDialog = false"
             />
@@ -2028,14 +2337,20 @@
       />
 
       <!-- Skip-Anfrage-Dialog (nur für Host sichtbar) -->
-      <q-dialog v-model="showSkipRequestDialog" persistent>
+      <q-dialog
+        v-model="showSkipRequestDialog"
+        persistent
+        aria-labelledby="game-dlg-skip-request-title"
+      >
         <q-card style="min-width: 320px">
           <q-card-section class="bg-primary">
-            <div class="text-h6">Skip-Anfrage</div>
+            <div id="game-dlg-skip-request-title" class="text-h6">
+              Skip-Anfrage
+            </div>
           </q-card-section>
           <q-card-section>
             <strong>{{ skipRequestFrom }}</strong> möchte den aktuellen Song
-            skippen.
+            überspringen.
           </q-card-section>
           <q-card-actions align="right">
             <q-btn
@@ -2058,10 +2373,14 @@
          im Bingo den Speichern-mit-Skip-Dialog zeigen kann. Vorher lag der
          Dialog nur im v-else-Zweig; im Bingo passierte beim Klick auf
          „Zur Lobby" gar nichts sichtbar. -->
-    <q-dialog v-model="showSaveSessionDialog" @hide="onSaveSessionDialogHidden">
+    <q-dialog
+      v-model="showSaveSessionDialog"
+      aria-labelledby="game-dlg-save-title"
+      @hide="onSaveSessionDialogHidden"
+    >
       <q-card style="min-width: 420px">
         <q-card-section class="bg-primary">
-          <div class="text-h6">
+          <div id="game-dlg-save-title" class="text-h6">
             {{
               saveDialogCallbackPending
                 ? "Vorher speichern?"
@@ -2072,7 +2391,8 @@
         <q-card-section>
           <div v-if="saveDialogCallbackPending" class="q-mb-md text-body2">
             Du kannst den aktuellen Spielstand jetzt speichern oder ohne
-            Speichern weiter zur Lobby.
+            Speichern {{ multiplayerMode ? "zur Lobby" : "zur Startseite" }}
+            wechseln.
           </div>
           <div v-else class="q-mb-md text-body2">
             Wähle aus, welche Bereiche gespeichert werden sollen.
@@ -2102,14 +2422,14 @@
           <template v-if="saveDialogCallbackPending">
             <q-btn
               flat
-              color="grey-7"
+              class="text-muted"
               label="Abbrechen"
               @click="cancelSaveSessionDialog"
             />
             <q-btn
               flat
               color="warning"
-              label="Überspringen"
+              label="Skip bestätigen"
               @click="skipSaveAndContinue"
             />
             <q-btn
@@ -2122,7 +2442,7 @@
           <template v-else>
             <q-btn
               flat
-              color="grey-7"
+              class="text-muted"
               label="Abbrechen"
               @click="showSaveSessionDialog = false"
             />
@@ -2149,19 +2469,33 @@ import {
   onBeforeUnmount,
 } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { Notify, useQuasar } from "quasar";
+import { useQuasar, getCssVar } from "quasar";
 import { emit as socketEmit } from "../utils/socketService";
 import { useTheme } from "../composables/useTheme";
+import {
+  readableTextOn,
+  contrastRatio,
+  hexToRgb,
+  rgbToHex,
+} from "../utils/themeColors";
 import { useGameState } from "../composables/useGameState";
 import { useSongManager } from "../composables/useSongManager";
 import { useGuessEngine } from "../composables/useGuessEngine";
 import { useMultiplayer } from "../composables/useMultiplayer";
+import { useRejoinRequests } from "../composables/useRejoinRequests";
 import { useBingoRound } from "../composables/useBingoRound";
 import { BINGO_COLORS } from "../composables/useBingo";
 import BingoCard from "../components/BingoCard.vue";
+import ActiveVersionsChip from "../components/ActiveVersionsChip.vue";
 import BingoLegend from "../components/BingoLegend.vue";
 import BingoAnswerInput from "../components/BingoAnswerInput.vue";
 import BingoBonusDialog from "../components/BingoBonusDialog.vue";
+import BingoAnnouncement from "../components/BingoAnnouncement.vue";
+import {
+  firstVariant,
+  displayArtists,
+  displayYears,
+} from "../utils/songVariants";
 import AvatarStack from "../components/AvatarStack.vue";
 import { loadSlotAvatars, SLOT_AVATARS_EVENT } from "../utils/profileService";
 import { useVersions } from "../composables/useVersions";
@@ -2169,10 +2503,12 @@ import { useVersions } from "../composables/useVersions";
 export default {
   name: "GamePage",
   components: {
+    ActiveVersionsChip,
     BingoCard,
     BingoLegend,
     BingoAnswerInput,
     BingoBonusDialog,
+    BingoAnnouncement,
     AvatarStack,
   },
 
@@ -2190,6 +2526,82 @@ export default {
       cardColorMode.value === "theme"
         ? "var(--app-accent)"
         : card.bgColor || "#3d3d3d";
+    // Schriftfarbe passend zur Kartenfarbe (als --card-text an Game.scss).
+    // Die Original-Palette hat helle Toene wie #00d2d3, auf denen weisse
+    // Schrift unter 2:1 lag; readableTextOn waehlt hell oder dunkel nach
+    // dem besseren Kontrast. Im Theme-Modus gilt die Akzent-Schrift.
+    const cardTextColor = (card) =>
+      cardColorMode.value === "theme"
+        ? "var(--app-on-accent)"
+        : readableTextOn(card.bgColor || "#3d3d3d");
+    // Randfarbe der Karte (als --card-edge an Game.scss).
+    // Barrierefreiheit (WCAG 1.4.11): dunkle Kartenfarben auf dunkler Flaeche. Die
+    // Zeitleiste liegt auf der Acryl-Flaeche, deren Farbe je nach Theme
+    // zwischen #141418 (dunkelste Stelle) und #3e3e42 (hellste Stelle)
+    // liegt. Toene wie #2c3e50 oder #222f3e verschwinden darauf, und ein
+    // Leuchtschein in derselben Farbe hilft nicht. Die Kartenfarbe bleibt
+    // unveraendert (die Farben sollen unterscheidbar bleiben), nur der Rand
+    // wird in 5-%-Schritten mit Weiss aufgehellt, bis er gegen beide
+    // Referenzen mindestens 3:1 erreicht. Im Theme-Modus gilt der Akzent
+    // als Textfarbe, der auf den Flaechen ohnehin 4,5:1 schafft.
+    const EDGE_REFERENCES = ["#141418", "#3e3e42"];
+    const EDGE_MIN_CONTRAST = 3;
+    const edgeColorCache = new Map();
+    const edgeReachesContrast = (hex) =>
+      EDGE_REFERENCES.every(
+        (ref) => contrastRatio(hex, ref) >= EDGE_MIN_CONTRAST,
+      );
+    const computeEdgeColor = (hex) => {
+      if (edgeReachesContrast(hex)) return hex;
+      const { r, g, b } = hexToRgb(hex);
+      for (let step = 1; step <= 20; step++) {
+        const t = step * 0.05;
+        const mixed = rgbToHex({
+          r: r + (255 - r) * t,
+          g: g + (255 - g) * t,
+          b: b + (255 - b) * t,
+        });
+        if (edgeReachesContrast(mixed)) return mixed;
+      }
+      return "#ffffff";
+    };
+    const cardEdgeColor = (card) => {
+      if (cardColorMode.value === "theme") return "var(--app-accent-text)";
+      const hex = String(card.bgColor || "#3d3d3d").toLowerCase();
+      let edge = edgeColorCache.get(hex);
+      if (!edge) {
+        edge = computeEdgeColor(hex);
+        edgeColorCache.set(hex, edge);
+      }
+      return edge;
+    };
+
+    // Schrift auf dem Erfolgs-Gruen (Kopf des Sieg-Dialogs). Gelesen aus der
+    // Quasar-Variable statt fest eingetragen, damit eine Aenderung der
+    // Erfolgsfarbe mitzieht.
+    const onPositiveText = readableTextOn(getCssVar("positive") || "#21ba45");
+
+    // Screenreader-Ueberschrift (h1) der Spielansicht je Modus.
+    const GAME_MODE_HEADINGS = {
+      normal: "Hitster: Normales Spiel",
+      film: "Hitster: Film / Serie",
+      battle: "Hitster: Battle",
+      bingo: "Hitster: Bingo",
+    };
+
+    // Zugaenglicher Name der Plus-Felder in der Zeitleiste: Position plus die
+    // Jahre der Nachbarkarten, damit man ohne Sicht weiss, wohin die Karte
+    // kommt. Platzhalter-Karten haben noch kein Jahr, dann bleibt es bei der
+    // Position.
+    const cardSlotLabel = (cards, pos) => {
+      const before = cards[pos - 1]?.year;
+      const after = cards[pos]?.year;
+      const base = `Karte an Position ${pos + 1} einordnen`;
+      if (before && after) return `${base}, zwischen ${before} und ${after}`;
+      if (after) return `${base}, vor ${after}`;
+      if (before) return `${base}, nach ${before}`;
+      return base;
+    };
 
     const showSettingsDialog = ref(false);
     const showInfoDialog = ref(false);
@@ -2304,6 +2716,8 @@ export default {
       multiplayerIsHost,
       multiplayerRoomCode,
       multiplayerAudioMode,
+      roomVersionsMeta,
+      selectedSongPools,
       guestSlotIndex,
       showSkipRequestDialog,
       skipRequestFrom,
@@ -2329,6 +2743,13 @@ export default {
       showGuestObjectionDialog,
       isMyGuestObjectionTurn,
       isHostWatchingGuestGuess,
+      // Song-Öffnen-Status für den Rate-Dialog
+      currentSongLink,
+      songOpenedUrl,
+      openSongHere,
+      // „Jetzt abspielen“, wenn der Browser das Öffnen ohne Klick blockiert
+      songPlayPromptUrl,
+      playPromptedSong,
     } = state;
 
     const {
@@ -2353,6 +2774,7 @@ export default {
       toggleObjectionOptIn,
       closeOptInWindow,
       clearObjectionTimers,
+      resumeObjectionTimers,
     } = useGuessEngine(state, { loadAnswerData });
 
     const {
@@ -2378,9 +2800,34 @@ export default {
       beginObjection,
       toggleObjectionOptIn,
       cancelGuessAndReplace,
+      clearObjectionTimers,
+      resumeObjectionTimers,
       route,
       router,
     });
+
+    // Rate-Dialog: „wurde geöffnet“ nur, wenn der aktuelle Song auf diesem
+    // Gerät tatsächlich geöffnet wurde. Sonst (etwa im Modus „alle Geräte“,
+    // solange nicht alle bereit sind, oder nach dem Laden eines Spielstands)
+    // bietet der Dialog das Öffnen selbst an.
+    const songOpenedForGuess = computed(
+      () =>
+        !!currentSongLink.value &&
+        songOpenedUrl.value === currentSongLink.value,
+    );
+    const canOpenSongFromGuess = computed(() =>
+      pendingSongUrl.value
+        ? !songReadyConfirmed.value
+        : !!(songPlayPromptUrl.value || currentSongLink.value),
+    );
+    const openSongFromGuess = () => {
+      // Im Modus „alle Geräte“ über den Bereit-Ablauf, damit alle synchron
+      // starten; wartet ein blockierter Song auf „Jetzt abspielen“, diesen;
+      // sonst direkt.
+      if (pendingSongUrl.value) confirmSongReady();
+      else if (songPlayPromptUrl.value) playPromptedSong();
+      else openSongHere(currentSongLink.value);
+    };
 
     // Bingo-Runden-Composable: verwaltet Reveal-Animation, Emit-Wrapper
     // für Host-/Team-Aktionen und Auto-Resolve-Timer (nur Host).
@@ -2397,6 +2844,18 @@ export default {
       return found ? found.label : poolValue;
     };
 
+    // Aktive Versionen für das Menü in der Kopfzeile, aufgelöst wie in der
+    // Lobby: erst der eigene Katalog, dann Name und Cover aus dem Raum.
+    const activeVersionOptions = computed(() =>
+      (selectedSongPools.value || []).map((value) => {
+        const v = allVersions.value.find((x) => x.value === value);
+        if (v) return { value, label: v.label, icon: v.icon || null };
+        const m = roomVersionsMeta.value?.[value];
+        if (m) return { value, label: m.label, icon: m.icon || null };
+        return { value, label: "Nicht mehr verfügbar", icon: null };
+      }),
+    );
+
     // ── Bingo-UI-Adapter für Game.vue-Template ─────────────────────────
     const bingoRound = bingoRoundApi.round;
     const bingoWinners = bingoRoundApi.winners;
@@ -2406,6 +2865,7 @@ export default {
     const bingoIAmCorrectAndNeedsMark = bingoRoundApi.iAmCorrectAndNeedsMark;
     const bingoIAmInBonusPending = bingoRoundApi.iAmInBonusPending;
     const bingoMySlotId = bingoRoundApi.mySlotId;
+    const bingoMyAnswerConfirmed = bingoRoundApi.myAnswerConfirmed;
 
     const bingoIAmInATeam = computed(() => bingoMySlotId.value !== null);
     const bingoBingoCounts = computed(
@@ -2440,6 +2900,10 @@ export default {
 
     const bingoCategoryColorHex = (colorKey) =>
       BINGO_COLORS[colorKey] || "#666";
+    // Lesbare Schrift auf der Kategorie-Farbe (als --cat-text an Game.scss
+    // und fuer die Farbmarke im Markier-Hinweis).
+    const bingoCategoryTextHex = (colorKey) =>
+      readableTextOn(bingoCategoryColorHex(colorKey));
 
     // Antwort-Text pro Team hübsch aufbereitet (für die Auflösung).
     const formatBingoAnswer = (categoryId, value) => {
@@ -2485,12 +2949,14 @@ export default {
     // Host-Action-Bereich angezeigt, damit der Host nicht die Runde
     // auflöst, bevor alle geantwortet haben.
     const bingoTotalTeams = computed(() => bingoTeamsBySlotIndex.value.length);
+    // Nur abgegebene Antworten zählen, ein ausgefülltes Feld allein nicht.
+    // Gezählt wird allein `teamConfirmed`: Vor der Auflösung schickt der
+    // Server nur die Antwort des eigenen Teams mit. Eine Abgabe ist nie leer,
+    // und jede Änderung der Antwort nimmt sie zurück.
     const bingoAnsweredCount = computed(() => {
-      const answers = bingoRound.value?.teamAnswers || {};
-      return bingoTeamsBySlotIndex.value.filter((t) => {
-        const v = answers[t.slotId];
-        return v !== undefined && String(v).trim() !== "";
-      }).length;
+      const confirmed = bingoRound.value?.teamConfirmed || {};
+      return bingoTeamsBySlotIndex.value.filter((t) => !!confirmed[t.slotId])
+        .length;
     });
     const bingoAllTeamsAnswered = computed(
       () =>
@@ -2531,6 +2997,8 @@ export default {
       bingoTeamAnswer.value = value ?? "";
       bingoRoundApi.submitTeamAnswer(bingoTeamAnswer.value);
     };
+    const onBingoConfirmAnswer = () => bingoRoundApi.teamConfirmAnswer();
+    const onBingoReopenAnswer = () => bingoRoundApi.teamReopenAnswer();
     const onBingoMarkCell = (cellIndex) =>
       bingoRoundApi.teamMarkCell(cellIndex);
     const onBingoBonusConfirm = ({ targetSlotId, cellIndex }) =>
@@ -2575,6 +3043,10 @@ export default {
 
       // ── Multiplayer-Setup ──────────────────────────────────────────────────
       initMultiplayer();
+      // Wird der Host hier angefragt, ob ein Spieler zurück darf, öffnet sich
+      // der Dialog auch in der Spielansicht. initMultiplayer hat den Socket
+      // angelegt, die Registrierung findet ihn also.
+      if (multiplayerMode.value) useRejoinRequests();
       // ── Ende Multiplayer-Setup ────────────────────────────────────────────
 
       const loadFromSessionQuery =
@@ -2591,11 +3063,15 @@ export default {
         }
       }
 
-      // Lade bereits gespielte Links aus localStorage
-      try {
-        playedLinksHistory.value = await loadPlayedLinksHistory();
-      } catch (error) {
-        console.error("Fehler beim Laden der History:", error);
+      // Gespielte Songs zurücksetzen, aber nicht beim Laden eines
+      // Spielstands: loadSessionSnapshot hat die History dann schon aus dem
+      // Stand übernommen, und loadPlayedLinksHistory liefert immer [].
+      if (!loadFromSessionQuery) {
+        try {
+          playedLinksHistory.value = await loadPlayedLinksHistory();
+        } catch (error) {
+          console.error("Fehler beim Laden der History:", error);
+        }
       }
 
       // Lade alle Song-Links
@@ -2606,22 +3082,6 @@ export default {
         preloadForNextCard();
       } catch (error) {
         console.error("Fehler beim Laden der Song-Links:", error);
-      }
-
-      // Info-Nachricht zum Startkarten-Ziehen nur bei neuem Spiel (nicht für Gäste)
-      if (
-        !loadFromSessionQuery &&
-        (!multiplayerMode.value || multiplayerIsHost.value)
-      ) {
-        setTimeout(() => {
-          Notify.create({
-            type: "info",
-            message:
-              'Klicke "Startkarte ziehen", um allen Spielern eine Startkarte zu geben.',
-            timeout: 4000,
-            position: "top",
-          });
-        }, 1000);
       }
     });
 
@@ -2915,12 +3375,77 @@ export default {
       bingoRoundApi.hostSetCell(team.slotId, cellIndex, marked);
     };
 
+    // ── Bingo: Einblendung „XY hat ein Bingo!" für alle ───────────────
+    // Jeder Client bekommt die Bingo-Zahlen vom Server und vergleicht sie
+    // mit dem letzten Stand. Steigt die Zahl eines Teams, kommt die
+    // Einblendung. Der erste Stand nach Laden/Reconnect zählt nicht, sonst
+    // würde jeder Neueinstieg alte Bingos noch einmal feiern.
+    const BINGO_ANNOUNCE_MS = 3500;
+    const bingoAnnouncement = ref(null);
+    let bingoAnnounceTimer = null;
+    let lastBingoCounts = null;
+    const bingoAnzahl = (n) =>
+      n === 1 ? "ein Bingo" : n === 2 ? "zwei Bingos" : `${n} Bingos`;
+    watch(
+      () => (bingoState.value ? { ...bingoBingoCounts.value } : null),
+      (counts) => {
+        if (!counts) {
+          lastBingoCounts = null;
+          return;
+        }
+        const prev = lastBingoCounts;
+        lastBingoCounts = counts;
+        if (!prev) return;
+        // Beim Sieg übernimmt die Sieg-Einblendung, keine zweite darüber.
+        if (bingoWinners.value && bingoWinners.value.length) return;
+        const neu = [];
+        for (const team of bingoTeamsBySlotIndex.value) {
+          const key = String(team.slotId);
+          const diff = Number(counts[key] || 0) - Number(prev[key] || 0);
+          if (diff > 0) neu.push({ name: team.name, diff });
+        }
+        if (!neu.length) return;
+        if (neu.length === 1) {
+          bingoAnnouncement.value = `${neu[0].name} hat ${bingoAnzahl(neu[0].diff)}!`;
+        } else {
+          const namen = neu.map((t) => t.name);
+          const liste = `${namen.slice(0, -1).join(", ")} und ${namen[namen.length - 1]}`;
+          bingoAnnouncement.value = `${liste} haben ein Bingo!`;
+        }
+        if (bingoAnnounceTimer) clearTimeout(bingoAnnounceTimer);
+        bingoAnnounceTimer = setTimeout(() => {
+          bingoAnnouncement.value = null;
+          bingoAnnounceTimer = null;
+        }, BINGO_ANNOUNCE_MS);
+      },
+    );
+    onBeforeUnmount(() => {
+      if (bingoAnnounceTimer) clearTimeout(bingoAnnounceTimer);
+    });
+
+    const bingoWinnerMessage = computed(() => {
+      const wins = bingoWinners.value || [];
+      if (!wins.length) return null;
+      const namen = bingoWinnerNames.value;
+      return namen.length > 1
+        ? `${namen.slice(0, -1).join(", ")} und ${namen[namen.length - 1]} gewinnen!`
+        : `${namen[0] || "Ein Team"} gewinnt!`;
+    });
+
     // ── Bingo: Ergebnis für die Statistik verbuchen ────────────────────
     // Bingo hat keine Punkte → scores = 0; nur Sieg + Spielzeit zählen.
     // Nur der Host verbucht; der Server verhindert Doppelbuchung zusätzlich.
+    // winnerIndices sind Slot-Indizes in Slot-Reihenfolge (wie
+    // bingoTeamsBySlotIndex und room.players auf dem Server), nicht slotIds.
     const bingoResultEmitted = ref(false);
     watch(bingoWinners, (winners) => {
-      if (!winners || !winners.length) return;
+      if (!winners || !winners.length) {
+        // Sieger geleert (Markierungen zurückgesetzt, Fehlklick zurückgenommen
+        // oder neues Bingo-Spiel): ein späterer echter Sieg wird wieder
+        // verbucht. Der Server setzt room.resultRecorded dabei ebenfalls zurück.
+        bingoResultEmitted.value = false;
+        return;
+      }
       if (!multiplayerIsHost.value) return;
       if (bingoResultEmitted.value) return;
       bingoResultEmitted.value = true;
@@ -2932,9 +3457,27 @@ export default {
       socketEmit("host:recordGameResult", { scores, winnerIndices });
     });
 
+    // Anzeige von Feldern mit mehreren Einträgen (`;`): Titel/Film die erste
+    // Variante, Künstler alle, Jahre alle („1975 / 2011").
+    const fmtTitle = (v) => firstVariant(v);
+    const fmtArtist = (v) => displayArtists(v);
+    const fmtYears = (song) => displayYears(song);
+
+    const pageHeading = computed(
+      () => GAME_MODE_HEADINGS[gameMode.value] || "Hitster: Spiel",
+    );
+
     return {
+      pageHeading,
+      fmtTitle,
+      fmtArtist,
+      fmtYears,
       isMobile,
       cardColor,
+      cardTextColor,
+      cardEdgeColor,
+      onPositiveText,
+      cardSlotLabel,
       canPlaceCards,
       drawAllStartCards,
       // Bingo (Etappe 2)
@@ -2972,6 +3515,7 @@ export default {
       bingoHighlightedCategoryIndex,
       bingoCurrentCategoryFull,
       bingoCategoryColorHex,
+      bingoCategoryTextHex,
       bingoActiveCategoryColor,
       bingoSecondsRemaining,
       bingoIAmCorrectAndNeedsMark,
@@ -2988,6 +3532,8 @@ export default {
       bingoAllTeamsAnswered,
       bingoOpponentTeamsForBonus,
       showBingoBonusDialog,
+      bingoAnnouncement,
+      bingoWinnerMessage,
       onBingoDrawCard,
       onBingoResolveRound,
       onBingoClassifySoloGroup,
@@ -2995,6 +3541,9 @@ export default {
       onBingoNextRound,
       onBingoSetTimerMode,
       onBingoTeamAnswerInput,
+      onBingoConfirmAnswer,
+      onBingoReopenAnswer,
+      bingoMyAnswerConfirmed,
       onBingoMarkCell,
       onBingoBonusConfirm,
       teamSkipBonus,
@@ -3023,11 +3572,16 @@ export default {
       guestDrawCard,
       guestPendingSongUrl,
       openGuestSongUrl,
+      songPlayPromptUrl,
+      playPromptedSong,
       pendingSongUrl,
       songReadyCount,
       songReadyTotal,
       songReadyConfirmed,
       confirmSongReady,
+      songOpenedForGuess,
+      canOpenSongFromGuess,
+      openSongFromGuess,
       guestPlaceCard,
       guestSubmitGuess,
       guestBeginObjection,
@@ -3077,6 +3631,7 @@ export default {
       guessResults,
       playerSongPools,
       battleVersionLabel,
+      activeVersionOptions,
       manualSkipSong,
       openSaveSessionDialog,
       openLoadSessionDialog,

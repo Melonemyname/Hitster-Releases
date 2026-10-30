@@ -1,13 +1,24 @@
 <template>
+  <!-- aria-labelledby landet bei QDialog (inheritAttrs: false) direkt auf dem
+       Element mit role="dialog"; so liest ein Screenreader den sichtbaren Titel
+       als Namen des Dialogs vor. -->
   <q-dialog
     :model-value="modelValue"
+    :aria-labelledby="titleId"
     @update:model-value="(v) => $emit('update:modelValue', v)"
   >
     <q-card class="versions-dialog-card">
       <q-card-section class="row items-center q-pb-none">
-        <div class="text-h6">Einstellungen · Versionen</div>
+        <div :id="titleId" class="text-h6">Einstellungen · Versionen</div>
         <q-space />
-        <q-btn v-close-popup icon="close" flat round dense />
+        <q-btn
+          v-close-popup
+          icon="close"
+          flat
+          round
+          dense
+          aria-label="Schließen"
+        />
       </q-card-section>
 
       <q-card-section>
@@ -29,14 +40,16 @@
           >
             <q-card class="timeline-look-card">
               <q-card-section class="timeline-look-content">
-                <img class="version-icon" :src="v.icon" :alt="v.label" />
+                <!-- Leeres alt: Der Name steht direkt darunter als Text, ein
+                     Screenreader würde ihn sonst doppelt vorlesen. -->
+                <img class="version-icon" :src="v.icon" alt="" />
               </q-card-section>
             </q-card>
             <div class="version-name" :title="v.label">{{ v.label }}</div>
             <!-- Die Zeile bleibt auch ohne Songzahl stehen (leer), sonst sitzt
                  die Aktionsreihe je nach Versionsart unterschiedlich tief und
                  die Knöpfe einer Rasterreihe fluchten nicht. -->
-            <div class="version-track-count text-caption" style="opacity: 0.6">
+            <div class="version-track-count text-caption text-muted">
               <template v-if="v.imported">{{ v.trackCount }} Songs</template>
             </div>
             <div class="version-manage-actions">
@@ -45,6 +58,11 @@
                 round
                 dense
                 :icon="isHidden(v.value) ? 'visibility_off' : 'visibility'"
+                :aria-label="
+                  isHidden(v.value)
+                    ? `${v.label} wieder einblenden`
+                    : `${v.label} ausblenden`
+                "
                 @click="toggleHidden(v.value)"
               >
                 <q-tooltip>{{
@@ -60,13 +78,18 @@
                 dense
                 :color="v.synced ? 'primary' : undefined"
                 :icon="v.synced ? 'cloud_done' : 'cloud_off'"
+                :aria-label="
+                  v.synced
+                    ? `${v.label}: mit Konto synchronisiert, nur auf diesem Gerät speichern`
+                    : `${v.label}: nur auf diesem Gerät, mit Konto synchronisieren`
+                "
                 :loading="busyValue === v.value"
                 @click="onToggleSync(v.value)"
               >
                 <q-tooltip>{{
                   v.synced
-                    ? "Mit Konto synchronisiert – klicken für nur dieses Gerät"
-                    : "Nur auf diesem Gerät – klicken zum Synchronisieren"
+                    ? "Mit Konto synchronisiert. Klicken für nur dieses Gerät"
+                    : "Nur auf diesem Gerät. Klicken zum Synchronisieren"
                 }}</q-tooltip>
               </q-btn>
 
@@ -80,6 +103,7 @@
                 round
                 dense
                 icon="edit"
+                :aria-label="`${v.label} bearbeiten`"
                 @click="openEditor(v, 'custom')"
               >
                 <q-tooltip>
@@ -94,6 +118,7 @@
                 round
                 dense
                 icon="group_add"
+                :aria-label="`${v.label} an Accounts freigeben`"
                 @click="openShare(v, 'create')"
               >
                 <q-tooltip>An Accounts freigeben</q-tooltip>
@@ -106,6 +131,7 @@
                   round
                   dense
                   icon="edit"
+                  :aria-label="`${v.label} bearbeiten`"
                   @click="openEditor(v)"
                 >
                   <q-tooltip>Version bearbeiten</q-tooltip>
@@ -115,6 +141,7 @@
                   round
                   dense
                   icon="group"
+                  :aria-label="`Freigaben von ${v.label} verwalten`"
                   @click="openShare(v, 'access')"
                 >
                   <q-tooltip>Freigaben verwalten</q-tooltip>
@@ -125,6 +152,7 @@
                   dense
                   color="negative"
                   icon="delete"
+                  :aria-label="`${v.label} löschen`"
                   :loading="busyValue === v.value"
                   @click="askDeleteRestricted(v)"
                 >
@@ -139,6 +167,11 @@
                 dense
                 color="negative"
                 icon="delete"
+                :aria-label="
+                  v.imported
+                    ? `${v.label} löschen`
+                    : `${v.label} von diesem Gerät löschen`
+                "
                 :loading="busyValue === v.value"
                 @click="askDelete(v)"
               >
@@ -188,7 +221,11 @@
 
         <div class="text-body2 q-mb-sm">
           Playlist mit
-          <a href="https://exportify.net" target="_blank" rel="noopener"
+          <a
+            class="text-link"
+            href="https://exportify.net"
+            target="_blank"
+            rel="noopener"
             >Exportify</a
           >
           als CSV exportieren und hier hochladen.
@@ -228,13 +265,30 @@
         </div>
         <div
           v-if="csvTracks.length > 0"
-          class="text-caption q-mb-sm"
-          style="opacity: 0.7"
+          class="text-caption text-muted q-mb-sm"
         >
           {{ csvTracks.length }} Songs erkannt<template v-if="csvOhneEnsemble > 0"
             >, bei {{ csvOhneEnsemble }} fehlt noch Band/Solo</template
           >
         </div>
+        <!-- MusicBrainz prüft im Hintergrund (nur angemeldet). Erstellen geht
+             jederzeit; was bis dahin angekommen ist, steckt in der Version. -->
+        <MusicBrainzPanel
+          v-if="mbRunning || mbSummary || mbItems.length || mbFilledItems.length"
+          class="q-mb-sm"
+          :running="mbRunning"
+          :done="mbDone"
+          :total="mbTotal"
+          :summary="mbSummary"
+          :items="mbItems"
+          :filled="mbFilledItems"
+          :original-count="mbOriginalCount"
+          @skip="mbSkip"
+          @accept="onMbAccept"
+          @keep="onMbKeep"
+          @accept-all-original="onMbAcceptAllOriginal"
+          @undo-ensemble="onMbUndoEnsemble"
+        />
 
         <q-input
           v-model="newLabel"
@@ -244,42 +298,7 @@
           class="q-mb-sm"
         />
 
-        <div class="text-caption q-mb-xs">Cover</div>
-        <div class="cover-picker q-mb-sm">
-          <button
-            v-for="(url, key) in presetIcons"
-            :key="key"
-            type="button"
-            class="cover-option"
-            :class="{
-              'cover-option--active':
-                selectedCover.kind === 'preset' && selectedCover.ref === key,
-            }"
-            @click="selectedCover = { kind: 'preset', ref: key }"
-          >
-            <img :src="url" :alt="key" />
-          </button>
-          <button
-            type="button"
-            class="cover-option cover-option--upload"
-            :class="{ 'cover-option--active': selectedCover.kind === 'upload' }"
-            @click="triggerCover"
-          >
-            <img
-              v-if="selectedCover.kind === 'upload'"
-              :src="selectedCover.ref"
-              alt="Eigenes Cover"
-            />
-            <q-icon v-else name="upload" size="24px" />
-          </button>
-          <input
-            ref="coverInput"
-            type="file"
-            accept="image/*"
-            style="display: none"
-            @change="onCoverSelected"
-          />
-        </div>
+        <CoverPicker v-model="selectedCover" class="q-mb-sm" />
 
         <q-toggle
           v-model="syncNew"
@@ -289,10 +308,9 @@
         />
         <div
           v-if="!loggedIn"
-          class="text-caption q-mb-sm"
-          style="opacity: 0.7"
+          class="text-caption text-muted q-mb-sm"
         >
-          Zum Synchronisieren anmelden – sonst nur auf diesem Gerät.
+          Zum Synchronisieren anmelden, sonst nur auf diesem Gerät.
         </div>
 
         <q-toggle
@@ -302,8 +320,7 @@
         />
         <div
           v-if="newIsFilm"
-          class="text-caption q-mb-sm"
-          style="opacity: 0.7"
+          class="text-caption text-muted q-mb-sm"
         >
           Nach dem Erstellen kannst du direkt die Filme pro Song eintragen
           (nötig, damit die Version im Film-Modus wählbar ist).
@@ -324,11 +341,11 @@
   </q-dialog>
 
   <!-- Löschen bestätigen -->
-  <q-dialog v-model="showConfirm">
+  <q-dialog v-model="showConfirm" :aria-labelledby="confirmTitleId">
     <q-card class="confirm-card">
       <q-card-section class="row items-center">
         <q-icon name="warning" color="negative" size="28px" class="q-mr-sm" />
-        <div class="text-h6">Version löschen?</div>
+        <div :id="confirmTitleId" class="text-h6">Version löschen?</div>
       </q-card-section>
       <q-card-section class="q-pt-none">
         <strong>{{ pendingDelete?.label }}</strong>
@@ -373,48 +390,39 @@
 </template>
 
 <script>
-import { ref, computed, watch } from "vue";
+import { ref, computed, watch, useId } from "vue";
 import { Notify, Dialog } from "quasar";
 import { useVersions } from "../composables/useVersions";
-import { VERSION_ICONS } from "../utils/versionsCatalog";
 import { parseExportifyFile } from "../utils/exportifyCsv";
 import { isLoggedIn } from "../utils/authService";
 import ShareVersionDialog from "./ShareVersionDialog.vue";
 import VersionEditor from "./VersionEditor.vue";
-
-// Bild -> auf max. 256px verkleinerte Data-URL (für eigene Cover).
-function fileToCover(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        const max = 256;
-        const scale = Math.min(1, max / Math.max(img.width, img.height));
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.max(1, Math.round(img.width * scale));
-        canvas.height = Math.max(1, Math.round(img.height * scale));
-        canvas
-          .getContext("2d")
-          .drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/png"));
-      };
-      img.onerror = reject;
-      img.src = reader.result;
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
+import MusicBrainzPanel from "./MusicBrainzPanel.vue";
+import CoverPicker from "./CoverPicker.vue";
+import {
+  useMusicBrainzCheck,
+  trackKey,
+  displayTrack,
+} from "../utils/musicbrainzService";
 
 export default {
   name: "VersionsDialog",
-  components: { ShareVersionDialog, VersionEditor },
+  components: {
+    ShareVersionDialog,
+    VersionEditor,
+    MusicBrainzPanel,
+    CoverPicker,
+  },
   props: {
     modelValue: { type: Boolean, default: false },
   },
   emits: ["update:modelValue"],
   setup(props) {
+    // Eindeutige IDs für die Dialogtitel (aria-labelledby), auch falls die
+    // Komponente einmal mehrfach im DOM steckt.
+    const titleId = `versions-title-${useId()}`;
+    const confirmTitleId = `versions-confirm-title-${useId()}`;
+
     const {
       allVersions,
       hasDeleted,
@@ -430,7 +438,6 @@ export default {
     } = useVersions();
 
     const loggedIn = ref(isLoggedIn());
-    const presetIcons = VERSION_ICONS;
 
     // Löschen / Sync
     const showConfirm = ref(false);
@@ -447,7 +454,6 @@ export default {
     const syncNew = ref(false);
     const newIsFilm = ref(false);
     const creating = ref(false);
-    const coverInput = ref(null);
 
     // Zustand der Unter-Dialoge (Teilen, Editor, Film-Eintrag).
     const showShare = ref(false);
@@ -503,7 +509,98 @@ export default {
         csvTracks.value.filter((t) => !String(t.ensemble || "").trim()).length,
     );
 
+    // MusicBrainz-Abgleich der gerade gewählten CSV. Ergebnisse, die nach dem
+    // Erstellen oder Schließen eintreffen, verwirft useMusicBrainzCheck.
+    const mb = useMusicBrainzCheck();
+
+    // Paket eingetroffen: fehlendes Band/Solo nachtragen (nie überschreiben).
+    // mb merkt sich, was es gefüllt hat (Anzeige und Zurücknehmen).
+    const applyBatch = (batch) => {
+      let changed = false;
+      const next = csvTracks.value.map((t) => {
+        const key = trackKey(t);
+        if (!(key in batch)) return t;
+        const n = mb.fillEnsemble(t, batch[key]);
+        if (n !== t) changed = true;
+        return n;
+      });
+      if (changed) csvTracks.value = next;
+    };
+
+    const mbItems = computed(() => {
+      const seen = new Set();
+      const out = [];
+      for (const t of csvTracks.value) {
+        const key = trackKey(t);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const hint = mb.openHint(t);
+        if (hint) out.push({ key, ...displayTrack(t), ...hint });
+      }
+      return out;
+    });
+
+    // Songs, deren Band/Solo von MusicBrainz kommt.
+    const mbFilledItems = computed(() => {
+      const seen = new Set();
+      const out = [];
+      for (const t of csvTracks.value) {
+        const key = trackKey(t);
+        if (seen.has(key)) continue;
+        const ensemble = mb.filledEnsemble(t);
+        if (!ensemble) continue;
+        seen.add(key);
+        const d = displayTrack(t);
+        out.push({ key, title: d.title, artist: d.artist, ensemble });
+      }
+      return out;
+    });
+
+    const mbOriginalCount = computed(
+      () => mbItems.value.filter((it) => it.originalYear).length,
+    );
+
+    // Gewähltes Jahr ('original' oder 'recording') als Hauptjahr vorn, das
+    // bisherige bleibt als weiteres Jahr.
+    const onMbAccept = (key, which = "recording") => {
+      let marked = null;
+      csvTracks.value = csvTracks.value.map((t) => {
+        if (trackKey(t) !== key) return t;
+        marked = t;
+        return mb.applyYear(t, which);
+      });
+      if (marked) mb.markHandled(marked);
+    };
+    const onMbKeep = (key) => {
+      const t = csvTracks.value.find((x) => trackKey(x) === key);
+      if (t) mb.markHandled(t);
+    };
+    const onMbAcceptAllOriginal = () => {
+      const keys = new Set(
+        mbItems.value.filter((it) => it.originalYear).map((it) => it.key),
+      );
+      if (!keys.size) return;
+      const done = [];
+      csvTracks.value = csvTracks.value.map((t) => {
+        if (!keys.has(trackKey(t))) return t;
+        done.push(t);
+        return mb.applyYear(t, "original");
+      });
+      done.forEach((t) => mb.markHandled(t));
+    };
+    // Band/Solo wieder leeren, wie es vor der Prüfung war.
+    const onMbUndoEnsemble = (key) => {
+      let found = null;
+      csvTracks.value = csvTracks.value.map((t) => {
+        if (trackKey(t) !== key || !mb.filledEnsemble(t)) return t;
+        found = t;
+        return { ...t, ensemble: "" };
+      });
+      if (found) mb.forgetFilled(found);
+    };
+
     const resetCreateForm = () => {
+      mb.reset();
       csvFile.value = null;
       csvTracks.value = [];
       newLabel.value = "";
@@ -515,7 +612,10 @@ export default {
     watch(
       () => props.modelValue,
       (open) => {
-        if (!open) return;
+        if (!open) {
+          mb.reset();
+          return;
+        }
         loggedIn.value = isLoggedIn();
         syncNew.value = loggedIn.value;
         loadVersions();
@@ -537,13 +637,18 @@ export default {
           newLabel.value = file.name.replace(/\.csv$/i, "");
         }
         if (tracks.length === 0) {
+          mb.reset();
           Notify.create({
             type: "warning",
             message: "Keine gültigen Songs in der CSV gefunden.",
             timeout: 3000,
           });
+        } else {
+          // Im Hintergrund, das Formular bleibt bedienbar.
+          mb.start(tracks, { onBatch: applyBatch }).catch(() => {});
         }
       } catch (e) {
+        mb.reset();
         csvFile.value = null;
         csvTracks.value = [];
         Notify.create({
@@ -553,25 +658,6 @@ export default {
         });
       } finally {
         parsingCsv.value = false;
-        if (event.target) event.target.value = "";
-      }
-    };
-
-    const triggerCover = () => coverInput.value?.click();
-
-    const onCoverSelected = async (event) => {
-      const file = event?.target?.files?.[0];
-      if (!file) return;
-      try {
-        const dataUrl = await fileToCover(file);
-        selectedCover.value = { kind: "upload", ref: dataUrl };
-      } catch {
-        Notify.create({
-          type: "negative",
-          message: "Bild konnte nicht geladen werden.",
-          timeout: 2500,
-        });
-      } finally {
         if (event.target) event.target.value = "";
       }
     };
@@ -587,11 +673,22 @@ export default {
           synced: syncNew.value && loggedIn.value,
           film: newIsFilm.value,
         });
-        Notify.create({
-          type: "positive",
-          message: `„${newLabel.value.trim()}" erstellt (${csvTracks.value.length} Songs).`,
-          timeout: 2500,
-        });
+        // Server nicht erreichbar: Die Version ist trotzdem angelegt (lokal,
+        // zum Hochladen vorgemerkt). Formular schließen wie bei Erfolg, sonst
+        // legt ein zweiter Klick eine Doppelung an.
+        Notify.create(
+          created?.pendingPush
+            ? {
+                type: "warning",
+                message: `„${newLabel.value.trim()}" lokal gespeichert, wird hochgeladen, sobald der Server erreichbar ist.`,
+                timeout: 4000,
+              }
+            : {
+                type: "positive",
+                message: `„${newLabel.value.trim()}" erstellt (${csvTracks.value.length} Songs).`,
+                timeout: 2500,
+              },
+        );
         const wasFilm = newIsFilm.value;
         resetCreateForm();
         // Film-Version: direkt in den Editor, damit die Filme pro Song
@@ -629,8 +726,10 @@ export default {
       } catch (e) {
         Notify.create({
           type: "negative",
-          message: `Löschen fehlgeschlagen: ${e.message}`,
-          timeout: 3000,
+          // Bei einer synchronisierten Version bricht das Löschen ab, wenn der
+          // Server nicht mitspielt; lokal bleibt dann alles, wie es war.
+          message: `Löschen fehlgeschlagen, die Version bleibt erhalten: ${e.message}`,
+          timeout: 4000,
         });
       } finally {
         busyValue.value = null;
@@ -646,8 +745,8 @@ export default {
       } catch (e) {
         Notify.create({
           type: "negative",
-          message: `Synchronisierung fehlgeschlagen: ${e.message}`,
-          timeout: 3000,
+          message: `Synchronisierung fehlgeschlagen, nichts geändert: ${e.message}`,
+          timeout: 4000,
         });
       } finally {
         busyValue.value = null;
@@ -684,6 +783,8 @@ export default {
     };
 
     return {
+      titleId,
+      confirmTitleId,
       allVersions,
       hasDeleted,
       isHidden,
@@ -691,7 +792,6 @@ export default {
       toggleHidden,
       resetDeleted,
       loggedIn,
-      presetIcons,
       showConfirm,
       pendingDelete,
       busyValue,
@@ -710,11 +810,8 @@ export default {
       newIsFilm,
       creating,
       canCreate,
-      coverInput,
       triggerCsv,
       onCsvSelected,
-      triggerCover,
-      onCoverSelected,
       createVersion,
       showShare,
       shareMode,
@@ -727,6 +824,18 @@ export default {
       openEditor,
       onSubDialogChanged,
       onShared,
+      mbRunning: mb.running,
+      mbDone: mb.done,
+      mbTotal: mb.total,
+      mbSummary: mb.summary,
+      mbItems,
+      mbFilledItems,
+      mbOriginalCount,
+      mbSkip: mb.skip,
+      onMbAccept,
+      onMbKeep,
+      onMbAcceptAllOriginal,
+      onMbUndoEnsemble,
     };
   },
 };
@@ -741,8 +850,16 @@ export default {
   text-align: center;
   transition: opacity 160ms ease;
 }
-.version-manage-item--hidden {
+/* Ausgeblendete Versionen: Früher wurde die ganze Kachel auf 40 % Deckkraft
+   gesetzt, damit fiel auch der Name unter das Mindestkontrastverhältnis.
+   Jetzt tritt nur das Cover zurück, der Name wechselt auf die gedämpfte,
+   aber noch lesbare Flächenschrift. Den Zustand nennt zusätzlich der Augen-
+   Knopf (Symbol und zugänglicher Name). */
+.version-manage-item--hidden .timeline-look-card {
   opacity: 0.4;
+}
+.version-manage-item--hidden .version-name {
+  color: var(--app-on-surface-muted);
 }
 /* Platzhalter-Höhe, damit Kacheln mit und ohne Songzahl gleich hoch bleiben. */
 .version-track-count {
@@ -761,37 +878,19 @@ export default {
   margin-top: 4px;
   min-height: 32px;
 }
+/* Keine Deckkraft-Absenkung mehr: Mit opacity mischten sich Chip-Fläche und
+   Schrift mit dem Untergrund, die Beschriftung kam je nach Theme nur noch auf
+   2,7:1 (dunkle Schrift auf abgedunkeltem Akzent). Ohne gilt das reguläre
+   Akzent-/On-Accent-Paar der Chips. */
 .standard-chip {
-  opacity: 0.7;
   font-size: 0.7rem;
 }
-.cover-picker {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+/* Link im Fließtext: Akzent als Textfarbe in der lesbaren Variante statt der
+   Browser-Standardfarbe (dunkelblau auf dunkler Fläche). */
+.text-link {
+  color: var(--app-accent-text);
+  text-decoration: underline;
 }
-.cover-option {
-  width: 52px;
-  height: 52px;
-  padding: 0;
-  border: 2px solid transparent;
-  border-radius: var(--surface-radius);
-  overflow: hidden;
-  background: var(--surface-bg-weak);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.cover-option img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-.cover-option--active {
-  border-color: var(--app-accent);
-}
-
 /* ── Schmale Bildschirme ────────────────────────────────────────────────
    Das Raster geht bereits auf zwei Spalten (app.scss). Hier vor allem die
    Aktionsreihe: Eine eigene Film-Version bringt es auf fuenf Knoepfe, die
@@ -807,10 +906,6 @@ export default {
   .version-name {
     font-size: 0.82rem;
     line-height: 1.2;
-  }
-  .cover-option {
-    width: 44px;
-    height: 44px;
   }
 }
 </style>

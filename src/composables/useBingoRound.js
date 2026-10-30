@@ -1,7 +1,8 @@
-import { computed, watch, onBeforeUnmount } from "vue";
+import { ref, computed, watch, onBeforeUnmount } from "vue";
 import { emit as socketEmit } from "../utils/socketService";
-import { openSongTab } from "../utils/songTabManager";
 import { BINGO_CATEGORIES } from "./useBingo";
+import { guessEnsemble } from "../utils/exportifyCsv";
+import { buildArtistEnsembleIndex } from "../utils/spotifyCsvService";
 
 /**
  * Composable für den Bingo-Runden-Ablauf im Client:
@@ -31,6 +32,8 @@ export function useBingoRound(state, { drawNewCard }) {
     songReadyCount,
     songReadyTotal,
     songReadyConfirmed,
+    openSongOrPrompt,
+    currentCard,
   } = state;
 
   // ── Abgeleitete Referenzen aus dem Server-State ─────────────────────
@@ -83,9 +86,48 @@ export function useBingoRound(state, { drawNewCard }) {
     );
   });
 
+  // Hat das eigene Team seine Antwort schon abgegeben?
+  const myAnswerConfirmed = computed(() => {
+    const sid = mySlotId.value;
+    if (sid === null) return false;
+    return !!round.value?.teamConfirmed?.[sid];
+  });
+
   // Kategorie-Farbe der aktuellen Runde (für pickableColor der eigenen Karte).
   const activeCategoryColor = computed(
     () => round.value?.category?.color || null,
+  );
+
+  // Reaktive Zeitquelle für den Countdown. `Date.now()` allein ist nicht
+  // reaktiv, die Anzeige würde sonst nur bei eingehenden roomStates
+  // springen. Der Takt läuft nur, solange eine Deadline aktiv ist.
+  const now = ref(Date.now());
+  let countdownTicker = null;
+  const stopCountdownTicker = () => {
+    if (countdownTicker) {
+      clearInterval(countdownTicker);
+      countdownTicker = null;
+    }
+  };
+  const startCountdownTicker = () => {
+    now.value = Date.now();
+    if (countdownTicker) return;
+    countdownTicker = setInterval(() => {
+      now.value = Date.now();
+    }, 250);
+  };
+  watch(
+    () => {
+      const r = round.value;
+      return r && r.phase === "answering" && r.deadlineTimestamp
+        ? r.deadlineTimestamp
+        : null;
+    },
+    (deadline) => {
+      if (deadline) startCountdownTicker();
+      else stopCountdownTicker();
+    },
+    { immediate: true },
   );
 
   // Countdown in Sekunden (nur im Timer-Modus).
@@ -93,7 +135,7 @@ export function useBingoRound(state, { drawNewCard }) {
     const r = round.value;
     if (!r || r.phase !== "answering") return null;
     if (!r.deadlineTimestamp) return null;
-    return Math.max(0, Math.ceil((r.deadlineTimestamp - Date.now()) / 1000));
+    return Math.max(0, Math.ceil((r.deadlineTimestamp - now.value) / 1000));
   });
 
   // ── Reveal-Animation (lokal) ────────────────────────────────────────
@@ -146,20 +188,97 @@ export function useBingoRound(state, { drawNewCard }) {
 
   // ── Host-Aktionen ───────────────────────────────────────────────────
 
+  // Start unterwegs: Zwischen `host:bingoStartRound` und dem roomState mit
+  // der neuen Phase steht die Runde lokal noch auf 'idle'. Ein zweiter
+  // Klick in dieser Lücke würde eine weitere Karte ziehen und den Song-
+  // Puffer überschreiben, der Server lehnt den zweiten Start aber ab und
+  // wertet gegen die erste Karte. Die Sperre fällt, sobald die Phase
+  // wechselt, oder spätestens nach einer Frist (falls der Server den Start
+  // still verworfen hat).
+  const START_PENDING_TIMEOUT_MS = 10000;
+  let startPending = false;
+  let startPendingTimer = null;
+  const clearStartPending = () => {
+    startPending = false;
+    if (startPendingTimer) {
+      clearTimeout(startPendingTimer);
+      startPendingTimer = null;
+    }
+  };
+
+  // Band/Solo für die Kategorie „Solo oder Gruppe?“: Fehlt der Wert in den
+  // Songdaten, wird er vor dem Rundenstart aus dem bekannten Bestand
+  // abgeleitet (gleiche Regeln wie beim Import). Der Host muss dann nur noch
+  // bei wirklich unbekannten Künstlern selbst entscheiden.
+  let ensembleIndex = null;
+  let ensembleIndexPromise = null;
+  const loadEnsembleIndex = () => {
+    if (!ensembleIndexPromise) {
+      ensembleIndexPromise = buildArtistEnsembleIndex()
+        .then((index) => {
+          ensembleIndex = index;
+          return index;
+        })
+        .catch(() => {
+          // Beim nächsten Ziehen erneut versuchen; ohne Index fragt der
+          // Server wie bisher den Host.
+          ensembleIndexPromise = null;
+          return null;
+        });
+    }
+    return ensembleIndexPromise;
+  };
+
+  // drawNewCard setzt die Karte und schickt `host:bingoStartRound` im selben
+  // Durchlauf ab. Ein synchroner Watcher ergänzt den Wert dazwischen, also
+  // bevor die Songdaten das Gerät verlassen.
+  watch(
+    () => currentCard?.value,
+    (card) => {
+      if (!card || gameMode?.value !== "bingo") return;
+      if (!multiplayerIsHost.value || !ensembleIndex) return;
+      if (String(card.ensemble || "").trim()) return;
+      const vermutet = guessEnsemble(card.artist, ensembleIndex, card.title);
+      if (vermutet) card.ensemble = vermutet;
+    },
+    { flush: "sync" },
+  );
+
   const hostDrawBingoCard = async () => {
     if (!multiplayerIsHost.value) return;
     if (round.value && round.value.phase !== "idle") return;
-    // Vor dem Ziehen: Team-Antwort-Buffer leeren.
+    if (startPending) return;
+    startPending = true;
+    startPendingTimer = setTimeout(clearStartPending, START_PENDING_TIMEOUT_MS);
+    // Index vorher laden (einmal pro Spiel), damit er beim Setzen der Karte
+    // schon bereitliegt.
+    await loadEnsembleIndex();
+    // Vor dem Ziehen: Team-Antwort-Buffer leeren. Ein Song-Puffer aus einem
+    // verworfenen Start ist in 'idle' veraltet und wird ebenfalls geleert,
+    // damit unten erkennbar ist, ob wirklich ein Start abging.
     bingoTeamAnswer.value = "";
-    // useSongManager.drawNewCard erkennt bingo-Modus und emittiert
-    // stattdessen `host:bingoStartRound` + puffert Song-URL/Card-Data.
-    await drawNewCard();
+    bingoPendingSongUrl.value = null;
+    bingoPendingCardData.value = null;
+    try {
+      // useSongManager.drawNewCard erkennt bingo-Modus und emittiert
+      // stattdessen `host:bingoStartRound` + puffert Song-URL/Card-Data.
+      await drawNewCard();
+    } finally {
+      // Kein Puffer gesetzt: Ziehen ist gescheitert (keine Songs, Ladefehler),
+      // es ist also kein Start unterwegs.
+      if (!bingoPendingSongUrl.value) clearStartPending();
+    }
   };
 
   const hostOpenAnsweringPhase = () => {
     if (!multiplayerIsHost.value) return;
-    if (!bingoPendingSongUrl.value) return;
-    const songUrl = bingoPendingSongUrl.value;
+    // Der Puffer liegt nur bei dem Host, der die Karte gezogen hat. Wurde
+    // jemand mitten in der Kategorie-Auslosung Host, nimmt er den Song-Link
+    // der Runde aus dem roomState (die Songdaten bleiben beim Server).
+    const songUrl =
+      bingoPendingSongUrl.value ||
+      (round.value?.phase === "reveal" ? round.value?.songLink : null);
+    if (!songUrl) return;
     const cardData = bingoPendingCardData.value;
     socketEmit("host:bingoOpenAnswering", {
       songUrl,
@@ -168,8 +287,10 @@ export function useBingoRound(state, { drawNewCard }) {
     // Host-only-Modus: Server broadcastet `cardDrawn` ohne Ready-Flow,
     // öffnet aber keine Popups. Der Host öffnet den Song hier lokal.
     // All-clients-Modus: Popup wird pro Client via Ready-Flow geöffnet.
+    // Der Aufruf kommt aus dem Timer der Animation, also ohne Klick: blockiert
+    // der Browser, bietet der Kopf „Jetzt abspielen“ an.
     if (multiplayerAudioMode?.value !== "all-clients") {
-      openSongTab(songUrl);
+      openSongOrPrompt(songUrl);
     }
     // Buffer leeren – der Song ist raus.
     bingoPendingSongUrl.value = null;
@@ -258,6 +379,25 @@ export function useBingoRound(state, { drawNewCard }) {
     },
   );
 
+  // Abgeben: aktuelle Antwort gleich mitschicken und einen noch offenen
+  // Live-Sync verwerfen, sonst könnte er nach der Abgabe ankommen.
+  const teamConfirmAnswer = () => {
+    if (!round.value || round.value.phase !== "answering") return;
+    const value = String(bingoTeamAnswer.value ?? "");
+    if (value.trim() === "") return;
+    if (answerDebounce) {
+      clearTimeout(answerDebounce);
+      answerDebounce = null;
+    }
+    socketEmit("team:bingoConfirmAnswer", { confirmed: true, value });
+  };
+
+  // Abgabe zurücknehmen, um die Antwort noch zu ändern.
+  const teamReopenAnswer = () => {
+    if (!round.value || round.value.phase !== "answering") return;
+    socketEmit("team:bingoConfirmAnswer", { confirmed: false });
+  };
+
   const teamMarkCell = (cellIndex) => {
     if (!iAmCorrectAndNeedsMark.value) return;
     socketEmit("team:bingoMarkCell", { cellIndex });
@@ -286,6 +426,8 @@ export function useBingoRound(state, { drawNewCard }) {
   watch(
     () => round.value?.phase,
     (phase, prev) => {
+      // Server hat den Start angenommen: Sperre gegen Doppelstart lösen.
+      if (phase && phase !== "idle") clearStartPending();
       if (phase === "reveal" && prev !== "reveal") {
         // Antwort-Feld leeren, wenn eine neue Runde beginnt.
         bingoTeamAnswer.value = "";
@@ -324,6 +466,17 @@ export function useBingoRound(state, { drawNewCard }) {
     },
   );
 
+  // Bonus des eigenen Teams erledigt (ein Teammitglied hat ihn eingesetzt
+  // oder verworfen), die Phase bleibt aber „bonus“, weil andere Teams noch
+  // entscheiden: Dialog bei den übrigen Mitgliedern schließen.
+  watch(iAmInBonusPending, (offen, warOffen) => {
+    if (warOffen && !offen && showBingoBonusDialog.value) {
+      showBingoBonusDialog.value = false;
+      bingoBonusTargetSlotId.value = null;
+      bingoBonusCellIndex.value = null;
+    }
+  });
+
   // Auto-Resolve im Timer-Modus (Host): wenn Deadline abläuft, Runde
   // auflösen. Nur der Host emittiert, damit der Server nur einmal
   // aufgerufen wird.
@@ -343,19 +496,33 @@ export function useBingoRound(state, { drawNewCard }) {
     }, 500);
   };
 
+  // Auch beim Host-Werden: Lief die Deadline schon, als der alte Host ging,
+  // ändert sie sich nicht mehr, der Timer muss trotzdem starten.
   watch(
-    () => round.value?.deadlineTimestamp,
-    (dl) => {
-      if (dl && multiplayerIsHost.value) startAutoResolveTimer();
+    () => [round.value?.deadlineTimestamp, multiplayerIsHost.value],
+    ([dl, isHost]) => {
+      if (dl && isHost) startAutoResolveTimer();
     },
     { immediate: true },
   );
+
+  // Host-Wechsel mitten in der Kategorie-Auslosung: Ist die Animation hier
+  // schon durch, hat sie die Antwortphase nicht geöffnet (wir waren noch
+  // Gast). Das holt der neue Host nach. Läuft sie noch, öffnet ihr Ende.
+  watch(multiplayerIsHost, (isHost, wasHost) => {
+    if (!isHost || wasHost) return;
+    if (round.value?.phase === "reveal" && !bingoRevealAnimating.value) {
+      hostOpenAnsweringPhase();
+    }
+  });
 
   // Cleanup
   onBeforeUnmount(() => {
     cancelRevealAnimation();
     if (answerDebounce) clearTimeout(answerDebounce);
     if (timerInterval) clearInterval(timerInterval);
+    stopCountdownTicker();
+    clearStartPending();
   });
 
   // Bingo-Modus wechseln → wenn wir auf 'bingo' bleiben, ist alles OK.
@@ -372,6 +539,7 @@ export function useBingoRound(state, { drawNewCard }) {
     mySlotId,
     iAmInBonusPending,
     iAmCorrectAndNeedsMark,
+    myAnswerConfirmed,
     activeCategoryColor,
     secondsRemaining,
     // Host
@@ -386,6 +554,8 @@ export function useBingoRound(state, { drawNewCard }) {
     hostSetCell,
     // Team
     submitTeamAnswer,
+    teamConfirmAnswer,
+    teamReopenAnswer,
     teamMarkCell,
     teamUseBonus,
     teamSkipBonus,

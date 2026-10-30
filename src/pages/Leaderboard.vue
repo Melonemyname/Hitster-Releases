@@ -2,10 +2,24 @@
   <q-page class="leaderboard-page">
     <div class="leaderboard-container">
       <div class="row items-center q-mb-lg head-fab-space">
-        <q-btn flat round icon="arrow_back" @click="goBack" />
-        <div class="text-h5 q-ml-sm">Rangliste</div>
+        <q-btn
+          flat
+          round
+          icon="arrow_back"
+          aria-label="Zurück"
+          @click="goBack"
+        />
+        <!-- Seitenüberschrift als h1; Optik bleibt über text-h5. -->
+        <h1 class="text-h5 q-ml-sm q-my-none">Rangliste</h1>
         <q-space />
-        <q-btn flat round icon="refresh" :loading="loading" @click="load">
+        <q-btn
+          flat
+          round
+          icon="refresh"
+          :loading="loading"
+          aria-label="Aktualisieren"
+          @click="load"
+        >
           <q-tooltip>Aktualisieren</q-tooltip>
         </q-btn>
       </div>
@@ -14,7 +28,9 @@
         <q-spinner size="42px" color="primary" />
       </q-inner-loading>
 
-      <div v-if="error" class="text-negative q-mb-md">{{ error }}</div>
+      <div v-if="error" class="text-negative q-mb-md" role="alert">
+        {{ error }}
+      </div>
 
       <q-card v-if="!loading && rows.length" class="lb-card">
         <q-list separator>
@@ -25,14 +41,17 @@
             @click="openProfile(row.username)"
           >
             <q-item-section avatar class="lb-rank-section">
-              <div class="lb-rank" :class="`lb-rank--${i + 1}`">{{ i + 1 }}</div>
+              <div class="lb-rank" :class="`lb-rank--${i + 1}`">
+                <span class="sr-only">Platz </span>{{ i + 1 }}
+              </div>
             </q-item-section>
             <q-item-section avatar>
               <q-avatar size="42px">
+                <!-- Leeres alt: Der Name steht direkt daneben als Text. -->
                 <img
                   v-if="avatarUrl(row.avatar)"
                   :src="avatarUrl(row.avatar)"
-                  :alt="row.username"
+                  alt=""
                 />
                 <q-icon v-else name="person" />
               </q-avatar>
@@ -48,8 +67,14 @@
             </q-item-section>
             <q-item-section side class="lb-stats">
               <div class="row items-center no-wrap" style="gap: 6px">
-                <q-chip dense square icon="stars">{{ row.totalPoints }}</q-chip>
-                <q-chip dense square icon="emoji_events">{{ row.wins }}</q-chip>
+                <!-- Die Symbole sind für Screenreader stumm (aria-hidden), die
+                     unsichtbaren Wörter sagen, wofür die Zahl steht. -->
+                <q-chip dense square icon="stars">
+                  <span class="sr-only">Punkte: </span>{{ row.totalPoints }}
+                </q-chip>
+                <q-chip dense square icon="emoji_events">
+                  <span class="sr-only">Siege: </span>{{ row.wins }}
+                </q-chip>
               </div>
             </q-item-section>
           </q-item>
@@ -59,7 +84,6 @@
       <div
         v-else-if="!loading && !error"
         class="text-center q-mt-xl"
-        style="opacity: 0.7"
       >
         Noch keine Statistiken vorhanden. Spielt ein Online-Spiel, um die
         Rangliste zu füllen.

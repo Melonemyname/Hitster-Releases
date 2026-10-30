@@ -60,6 +60,11 @@ server/server-owner.json
 # Eingeschränkte Versionen: Runtime-Store (Seed .seed.json bleibt im Repo)
 server/restricted-versions.json
 .gh-token
+# MusicBrainz: Zwischenspeicher (Server im DATA_DIR, Prüfskript im Arbeitsordner)
+# und der Bericht des Prüfskripts, alles Laufzeitdaten
+server/musicbrainz-cache.json
+.musicbrainz-cache.json
+song-data-report.md
 
 # ── Laufzeitdaten des Servers (NIE versionieren) ──────────────────────────
 # Entstehen im Betrieb bzw. im DATA_DIR. Enthalten Konten mit Passwort-Hashes,

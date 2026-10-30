@@ -32,6 +32,7 @@ import coverGuilty from "../assets/versions/guilty.png";
 import coverSummer from "../assets/versions/summer.png";
 import coverHipHop from "../assets/versions/hiphop.png";
 import coverSchlager from "../assets/versions/schlager.png";
+import coverWacken from "../assets/versions/wacken.png";
 
 // Dateiname → aufgelöste Asset-URL (gebündelte Standard-Cover).
 export const BUNDLED_COVER_URLS = {
@@ -49,6 +50,7 @@ export const BUNDLED_COVER_URLS = {
   "summer.png": coverSummer,
   "hiphop.png": coverHipHop,
   "schlager.png": coverSchlager,
+  "wacken.png": coverWacken,
 };
 
 const FALLBACK_COVER = "custom.png";

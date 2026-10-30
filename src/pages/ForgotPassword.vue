@@ -3,8 +3,9 @@
     <q-card class="forgot-card">
       <q-card-section class="text-center q-pb-none">
         <q-icon name="lock_reset" color="primary" size="56px" />
-        <div class="text-h5 q-mt-sm">Passwort zurücksetzen</div>
-        <div class="text-subtitle2 text-grey q-mb-md">
+        <!-- Seitenüberschrift als h1; Optik bleibt über text-h5. -->
+        <h1 class="text-h5 q-mt-sm q-mb-none">Passwort zurücksetzen</h1>
+        <div class="text-subtitle2 text-muted q-mb-md">
           Über deine Sicherheitsfrage
         </div>
       </q-card-section>
@@ -15,6 +16,7 @@
           <q-input
             v-model="username"
             label="Benutzername"
+            autocomplete="username"
             outlined
             dark
             autofocus
@@ -56,6 +58,7 @@
           <q-input
             v-model="newPassword"
             label="Neues Passwort"
+            autocomplete="new-password"
             :type="showPassword ? 'text' : 'password'"
             outlined
             dark
@@ -66,10 +69,17 @@
             ]"
           >
             <template #prepend><q-icon name="lock" /></template>
+            <!-- Als Knopf statt klickbarem Symbol: per Tastatur erreichbar und
+                 mit Namen für Screenreader. -->
             <template #append>
-              <q-icon
-                :name="showPassword ? 'visibility_off' : 'visibility'"
-                class="cursor-pointer"
+              <q-btn
+                flat
+                round
+                dense
+                :icon="showPassword ? 'visibility_off' : 'visibility'"
+                :aria-label="
+                  showPassword ? 'Passwort verbergen' : 'Passwort anzeigen'
+                "
                 @click="showPassword = !showPassword"
               />
             </template>
@@ -78,6 +88,7 @@
           <q-input
             v-model="newPasswordConfirm"
             label="Neues Passwort bestätigen"
+            autocomplete="new-password"
             :type="showPassword ? 'text' : 'password'"
             outlined
             dark
@@ -100,7 +111,6 @@
           />
           <q-btn
             flat
-            color="grey"
             label="Anderer Benutzername"
             class="full-width"
             @click="step = 1"
@@ -204,7 +214,8 @@ export default {
 .forgot-card {
   width: 100%;
   max-width: 420px;
-  color: #fff;
+  /* Flächenschrift über das Token statt fest #fff (Theming-Regel). */
+  color: var(--app-on-surface);
   border-radius: 12px;
 }
 </style>

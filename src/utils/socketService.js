@@ -17,9 +17,26 @@ export function getSocket () {
 export function connect () {
   if (socket?.connected || socket?.active) return socket
 
+  // Hat die Auth-Middleware des Servers die Verbindung abgelehnt (Token
+  // abgelaufen, Server neu gestartet), ist der Socket nicht mehr `active`
+  // und versucht es auch nicht von selbst erneut. Eine neue Instanz würde
+  // alle Listener verlieren, die Lobby, Spielansicht und Rückkehr-Anfragen
+  // an die alte gehängt haben. Deshalb dieselbe Instanz neu verbinden; das
+  // Token holt sich `auth` beim Verbinden ohnehin frisch.
+  if (socket) {
+    socket.connect()
+    return socket
+  }
+
   socket = io(SERVER_URL, {
-    auth: { token: getToken() },
-    transports: ['polling'],
+    // Als Funktion, damit jeder (Re-)Connect das aktuelle Token nimmt, etwa
+    // nach einer Passwortänderung, die das alte ungültig macht.
+    auth: (cb) => cb({ token: getToken() }),
+    // Erst Polling (klappt überall), dann Upgrade auf WebSocket. Mit reinem
+    // Polling war jede Nachricht eine eigene HTTPS-Anfrage, und auf einer
+    // wackeligen Leitung dauerte alles ewig. Caddy reicht WebSockets durch;
+    // wo sie blockiert sind, bleibt die Verbindung einfach beim Polling.
+    transports: ['polling', 'websocket'],
     reconnectionAttempts: Infinity,
     reconnectionDelay: 2000,
     reconnectionDelayMax: 10000

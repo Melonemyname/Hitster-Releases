@@ -15,6 +15,10 @@ contextBridge.exposeInMainWorld('hitster', {
   setAlwaysOnTop: (value) => ipcRenderer.invoke('hitster:setAlwaysOnTop', value),
   // Update jetzt installieren (nach `downloaded`-Event vom Renderer angestoßen)
   installUpdate: () => ipcRenderer.invoke('hitster:installUpdate'),
+  // Letzter Update-Status, falls ein Event kam, bevor die Oberfläche zuhörte
+  getUpdateStatus: () => ipcRenderer.invoke('hitster:getUpdateStatus'),
+  // App beenden (Knopf „Beenden" im Hauptmenü)
+  quit: () => ipcRenderer.invoke('hitster:quit'),
   // Songs-Ordner: komplette Song-Daten lesen + Ordner verwalten
   readSongData: () => ipcRenderer.invoke('hitster:readSongData'),
   getSongFolder: () => ipcRenderer.invoke('hitster:getSongFolder'),

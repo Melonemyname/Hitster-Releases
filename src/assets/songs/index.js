@@ -30,6 +30,7 @@ import nederlandsRock from "./hitster-nederlands-rock.txt?raw";
 import nordicsRock from "./hitster-nordics-rock.txt?raw";
 import platinum from "./hitster-platinum-edition.txt?raw";
 import poloniaRock from "./hitster-polonia-rock.txt?raw";
+import wacken from "./hitster-wacken-on-air.txt?raw";
 
 // Schlüssel = Dateiname (wie in SONG_POOL_FILE_MAPPING referenziert).
 export const SONG_FILES = {
@@ -53,4 +54,5 @@ export const SONG_FILES = {
   "hitster-nordics-rock.txt": nordicsRock,
   "hitster-platinum-edition.txt": platinum,
   "hitster-polonia-rock.txt": poloniaRock,
+  "hitster-wacken-on-air.txt": wacken,
 };

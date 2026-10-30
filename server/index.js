@@ -39,16 +39,21 @@ const {
 const {
   createRoom,
   getRoom,
+  deleteRoom,
   addPlayerToSlot,
   removePlayerFromRoom,
   setSlotPool,
   getRoomPublicInfo,
   getRoomBroadcastState,
+  roomStateNeedsViewer,
+  roomStateForViewer,
+  sanitizeGameStateForGuests,
   initBingoState,
   ensureAllTeamsHaveCards,
   startBingoRound,
   openBingoAnswering,
   setBingoTeamAnswer,
+  confirmBingoTeamAnswer,
   resolveBingoRound,
   classifyBingoSoloGroup,
   markBingoCell,
@@ -57,6 +62,8 @@ const {
   nextBingoRound,
   resetBingoMarks,
   hostSetBingoCell,
+  advanceStalledBingoRound,
+  setSlotConnectedCheck,
   setBingoTimerMode,
   normalizeGameMode,
   normalizeBingoSettings,
@@ -68,6 +75,7 @@ const {
 } = require('./customVersions')
 const restrictedVersions = require('./restrictedVersions')
 const { dataPath } = require('./dataDir')
+const musicbrainz = require('./musicbrainz')
 
 const app = express()
 const server = http.createServer(app)
@@ -140,7 +148,15 @@ const authLimiter = rateLimit({
   max: 20,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: 'rate_limited', message: 'Zu viele Anfragen – bitte spaeter erneut versuchen.' }
+  // `error` bleibt der Code fuer die App, `message` ist der Text fuer Menschen.
+  // Beim Login geht es um Anmeldeversuche, bei Registrierung und
+  // Wiederherstellung allgemein um Anfragen.
+  handler: (req, res, _next, options) => {
+    const message = req.path === '/api/login'
+      ? 'Zu viele Anmeldeversuche. Bitte warte kurz und versuche es dann erneut.'
+      : 'Zu viele Anfragen. Bitte warte kurz und versuche es dann erneut.'
+    res.status(options.statusCode).json({ error: 'rate_limited', message })
+  }
 })
 
 // Verzeichnis für hochgeladene Profilbilder (statisch ausgeliefert).
@@ -552,7 +568,9 @@ app.patch('/api/profile/password', authMiddleware, async (req, res) => {
   const { oldPassword, newPassword } = req.body || {}
   const result = await changePassword(req.username, oldPassword, newPassword)
   if (!result.ok) return fail(res, result.error)
-  res.json({ success: true })
+  // Die Änderung macht alle bisherigen Tokens ungültig, auch das gerade
+  // benutzte. Der Client muss das neue Token übernehmen.
+  res.json({ success: true, token: result.token, id: req.userId, username: req.username })
 })
 
 // PATCH /api/profile/security  – Sicherheitsfrage + Antwort setzen/ändern
@@ -633,6 +651,103 @@ app.delete('/api/profile/avatar', authMiddleware, (req, res) => {
   res.json(result.profile)
 })
 
+// POST /api/musicbrainz/check
+// Songdaten (Jahr, Live/Cover/Neuaufnahme, Band/Solo) gegen MusicBrainz
+// prüfen. Läuft über den Server statt direkt aus dem Client, weil MusicBrainz
+// nur eine Anfrage pro Sekunde und IP erlaubt: Hier gibt es eine gemeinsame
+// Warteschlange und einen Cache für alle Nutzer. Höchstens 10 Songs pro
+// Anfrage, damit eine Anfrage nicht minutenlang hängt (mit dem Ratenlimit
+// dauert sie trotzdem bis zu rund 20 s; das ist so gewollt).
+const MB_MAX_TRACKS = 10
+app.post('/api/musicbrainz/check', authMiddleware, async (req, res) => {
+  const { tracks, artistsOnly } = req.body || {}
+  if (!Array.isArray(tracks) || tracks.length === 0) {
+    return res.status(400).json({ error: 'invalid_tracks', message: 'tracks fehlt oder ist leer' })
+  }
+  if (tracks.length > MB_MAX_TRACKS) {
+    return res.status(400).json({
+      error: 'too_many_tracks',
+      message: `Höchstens ${MB_MAX_TRACKS} Songs pro Anfrage`
+    })
+  }
+  const text = (wert) => (typeof wert === 'string' || typeof wert === 'number'
+    ? String(wert).trim().slice(0, 300)
+    : '')
+  const eintraege = []
+  for (const t of tracks) {
+    const key = t && text(t.key)
+    if (!key) {
+      return res.status(400).json({ error: 'invalid_track', message: 'Jeder Song braucht einen key' })
+    }
+    eintraege.push({
+      key,
+      isrc: text(t.isrc),
+      spotifyId: musicbrainz.spotifyIdAus(text(t.trackId)),
+      title: text(t.title),
+      artist: text(t.artist),
+      year: text(t.year)
+    })
+  }
+
+  // Bricht der Client ab (Dialog geschlossen), keine weiteren Anfragen mehr
+  // an MusicBrainz stellen; die Plätze in der Warteschlange braucht sonst
+  // jemand anderes.
+  let abgebrochen = false
+  res.on('close', () => { if (!res.writableEnded) abgebrochen = true })
+
+  const results = {}
+  if (!artistsOnly) {
+    // Alle Spotify-Links eines Blocks mit einer einzigen Anfrage auflösen.
+    try {
+      await musicbrainz.prefetchSpotify(eintraege.map((e) => e.spotifyId))
+    } catch (err) {
+      console.warn('[musicbrainz] Spotify-Vorabfrage fehlgeschlagen:', err?.message || err)
+    }
+  }
+  for (const e of eintraege) {
+    if (abgebrochen) break
+    try {
+      if (artistsOnly) {
+        const a = await musicbrainz.lookupArtist(e.artist)
+        results[e.key] = {
+          matchedBy: a && a.mbid ? 'artist' : null,
+          mbid: null,
+          title: null,
+          artist: a ? a.name : null,
+          firstYear: null,
+          flags: [],
+          artistMbid: a ? a.mbid : null,
+          artistType: a ? a.type : null,
+          ensemble: a ? a.ensemble : null,
+          yearDiffers: false,
+          originalYear: null,
+          originalMbid: null,
+          originalTitle: null,
+          originalDiffers: false
+        }
+      } else {
+        const r = await musicbrainz.lookupTrack(e)
+        const unserJahr = musicbrainz.hauptjahr(e.year)
+        // yearDiffers vergleicht mit der gefundenen Aufnahme, originalDiffers
+        // mit der ursprünglichen Studioaufnahme (nur gesetzt, wenn die
+        // gefundene ein Remaster, eine Neuaufnahme o. ä. ist).
+        results[e.key] = {
+          ...r,
+          yearDiffers: !!(unserJahr && r.firstYear && unserJahr !== r.firstYear),
+          originalDiffers: !!(unserJahr && r.originalYear && unserJahr !== r.originalYear)
+        }
+      }
+    } catch (err) {
+      // Ein einzelner Fehler (Timeout, MusicBrainz überlastet) soll nicht die
+      // ganze Anfrage scheitern lassen.
+      console.warn('[musicbrainz] Abfrage fehlgeschlagen:', err?.message || err)
+      results[e.key] = null
+    }
+  }
+  if (abgebrochen) return
+  res.json({ results })
+})
+
 // SPA-Fallback (muss nach allen API-Routen stehen)
 if (fs.existsSync(frontendDist)) {
   app.get('*', (_req, res) => {
@@ -654,6 +769,328 @@ const socketUserMap = new Map()
 const hostSocketMap = new Map()
 // `username:roomCode` → timeoutId  (Karenzzeit vor Lobby-Entfernung)
 const pendingRemovals = new Map()
+// roomCode → timeoutId  (Aufräumen eines laufenden Spiels ohne Verbindungen)
+const roomCleanupTimers = new Map()
+// Karenz, bevor ein laufendes Spiel ohne verbundene Sockets gelöscht wird.
+// Lang genug für ein Neuladen oder einen kurzen Netzausfall aller Beteiligten.
+const ROOM_CLEANUP_MS = 10 * 60 * 1000
+// roomCode → Map(username → { sid, slotName })  (offene Rückkehr-Anfragen in
+// ein laufendes Spiel). Wer die App geschlossen hat und per Raumcode
+// zurückkommt, braucht die Freigabe des Hosts. Der anfragende Socket steht
+// bis dahin nicht im Raum, deshalb wird er hier statt in socketUserMap geführt.
+const pendingRejoins = new Map()
+
+// Alle offenen Rückkehr-Anfragen eines Raums an den aktuellen Host-Socket
+// schicken. Nach einem Host-Wechsel oder Neuladen des Hosts kennt dessen
+// Oberfläche die Anfragen sonst nicht, und die Anfragenden warten ewig.
+function sendPendingRejoinsToHost (roomCode) {
+  const anfragen = pendingRejoins.get(roomCode)
+  if (!anfragen || anfragen.size === 0) return
+  const hostSid = hostSocketMap.get(roomCode)
+  if (!hostSid) return
+  for (const [username, { slotName }] of anfragen.entries()) {
+    io.to(hostSid).emit('rejoinRequest', { roomCode, username, slotName })
+  }
+}
+
+// Offene Rückkehr-Anfrage entfernen. Liefert den Eintrag oder null, wenn es
+// keine (mehr) gab. Mit `notifyHost` erfährt der Host, dass er sie aus seiner
+// Liste nehmen kann.
+function closePendingRejoin (roomCode, username, { notifyHost = false } = {}) {
+  const anfragen = pendingRejoins.get(roomCode)
+  const eintrag = anfragen?.get(username)
+  if (!eintrag) return null
+  anfragen.delete(username)
+  if (anfragen.size === 0) pendingRejoins.delete(roomCode)
+  if (notifyHost) {
+    const hostSid = hostSocketMap.get(roomCode)
+    if (hostSid) io.to(hostSid).emit('rejoinRequestClosed', { roomCode, username })
+  }
+  return eintrag
+}
+
+// Ein anderer Socket desselben Nutzers im selben Raum (zweiter Tab oder
+// bereits wiederverbundener Client), oder null.
+function otherSocketOfUser (username, roomCode, exceptSid) {
+  for (const [sid, sInfo] of socketUserMap.entries()) {
+    if (sid === exceptSid) continue
+    if (sInfo.roomCode === roomCode && sInfo.username === username) return sid
+  }
+  return null
+}
+
+// Ist noch irgendein Socket (außer `exceptSid`) im Raum?
+function roomHasSockets (roomCode, exceptSid) {
+  for (const [sid, sInfo] of socketUserMap.entries()) {
+    if (sid === exceptSid) continue
+    if (sInfo.roomCode === roomCode) return true
+  }
+  return false
+}
+
+// Hat der Raum einen verbundenen Host? Der gemerkte Host-Socket muss noch
+// existieren und im Raum stehen.
+function roomHasConnectedHost (roomCode) {
+  const sid = hostSocketMap.get(roomCode)
+  if (!sid || !io.sockets.sockets.has(sid)) return false
+  return socketUserMap.get(sid)?.roomCode === roomCode
+}
+
+// Ist der Slot gerade verbunden, also mindestens ein Mitglied mit einem Socket
+// im Raum? `exceptSid` nimmt einen Socket aus, der gerade geht.
+function slotHasConnectedMember (slot, roomCode, exceptSid = null) {
+  return (slot?.members || []).some((m) => !!otherSocketOfUser(m, roomCode, exceptSid))
+}
+
+// Die Bingo-Runde fragt über diesen Haken, ob ein Team gerade bedient werden
+// kann (siehe rooms.js, `setSlotConnectedCheck`).
+setSlotConnectedCheck((room, slotId) => {
+  const slot = (room?.players || []).find((p) => p.slotId === slotId)
+  return !!slot && slotHasConnectedMember(slot, room.code)
+})
+
+// Läuft der Slot-Bestand gerade wie im laufenden Spiel? Gilt auch für die
+// Siegerehrung nach Spielende (`gameOver`): Bis der Host eine neue Runde
+// startet oder zur Lobby wechselt, muss die Slot-Liste stehen bleiben, sonst
+// passen die Slot-Indizes im Spielstand des Hosts (Weiterleitungen an den
+// Host, Verbuchen des Ergebnisses) nicht mehr zu room.players.
+function slotsFrozen (room) {
+  return !!(room?.gameStarted || room?.gameOver)
+}
+
+// ── Bereit-Ablauf „Alle Geräte“ (all-clients) ─────────────────────────────
+// Gezählt werden nur Slots mit verbundenem Mitglied. Ein Slot, dessen
+// Mitglieder gegangen sind oder die Verbindung verloren haben, hält sonst
+// alle anderen auf. `songReadySlots` enthält slotIds (stabil, auch wenn
+// sich die Reihenfolge ändert) und entdoppelt wiederholte Meldungen, etwa
+// nach einem Reconnect.
+function songReadyCounts (room, roomCode, exceptSid = null) {
+  const verbunden = (room.players || []).filter((slot) => slotHasConnectedMember(slot, roomCode, exceptSid))
+  const bereit = verbunden.filter((slot) => room.songReadySlots?.has(slot.slotId)).length
+  return { readyCount: bereit, totalCount: verbunden.length }
+}
+
+function clearSongReady (room) {
+  if (!room) return
+  room.pendingSongUrl = null
+  room.songReadySlots = null
+}
+
+// Zähler an alle schicken und, wenn alle verbundenen Slots bereit sind, den
+// Song freigeben. Aufgerufen nach jeder Bereit-Meldung und immer dann, wenn
+// ein Socket den Raum verlässt oder dazukommt.
+function updateSongReady (room, roomCode, exceptSid = null) {
+  if (!room?.pendingSongUrl || !room.songReadySlots) return
+  const { readyCount, totalCount } = songReadyCounts(room, roomCode, exceptSid)
+  io.to(roomCode).emit('song:readyUpdate', { readyCount, totalCount })
+  if (readyCount >= totalCount) {
+    io.to(roomCode).emit('song:openNow', { songUrl: room.pendingSongUrl })
+    clearSongReady(room)
+  }
+}
+
+// ── Rückkehr nach bewusstem Verlassen ─────────────────────────────────────
+// Wer ein laufendes Spiel über „Raum verlassen“ verlässt, steht in
+// `room.leftMembers` und kommt nur mit einer einmaligen Freigabe
+// (`room.rejoinGrants`) zurück: vom Host über host:answerRejoin, oder
+// automatisch, wenn gerade kein Host da ist, der freigeben könnte. Ein
+// Reconnect nach Netzabbruch oder Neuladen steht nicht in der Liste und
+// braucht deshalb keine Freigabe.
+function markMemberLeft (room, username) {
+  if (!room.leftMembers) room.leftMembers = new Set()
+  room.leftMembers.add(username)
+}
+
+function grantRejoin (room, username) {
+  if (!room.rejoinGrants) room.rejoinGrants = new Set()
+  room.rejoinGrants.add(username)
+}
+
+function clearRejoinState (room) {
+  room.leftMembers = new Set()
+  room.rejoinGrants = new Set()
+}
+
+// Kein Host mehr da und kein Nachfolger: Niemand kann offene Anfragen
+// beantworten. Statt die Anfragenden ewig warten zu lassen, werden alle
+// freigegeben; der erste, der beitritt, übernimmt die Host-Rolle (joinRoom).
+function autoApproveRejoins (room, roomCode) {
+  const anfragen = pendingRejoins.get(roomCode)
+  if (!anfragen || anfragen.size === 0) return
+  for (const [username, eintrag] of [...anfragen.entries()]) {
+    grantRejoin(room, username)
+    io.to(eintrag.sid).emit('rejoinAnswer', { roomCode, accepted: true })
+    console.log(`Rückkehr von ${username} in Raum ${roomCode} automatisch freigegeben (kein Host verbunden)`)
+  }
+  pendingRejoins.delete(roomCode)
+}
+
+// Nachfolger für die Host-Rolle: erstes Mitglied in Slot-Reihenfolge (alle
+// Slots, alle Mitglieder), das gerade verbunden ist. `excludeUsername` und
+// `excludeSid` nehmen den scheidenden Host aus. Liefert { username, sid }
+// oder null.
+function findHostCandidate (room, roomCode, { excludeUsername = null, excludeSid = null } = {}) {
+  for (const slot of room.players || []) {
+    for (const member of slot.members || []) {
+      if (member === excludeUsername) continue
+      for (const [sid, sInfo] of socketUserMap.entries()) {
+        if (sid === excludeSid) continue
+        if (sInfo.roomCode === roomCode && sInfo.username === member) {
+          return { username: member, sid }
+        }
+      }
+    }
+  }
+  return null
+}
+
+// Host-Rolle übergeben und den neuen Host direkt informieren, damit er seine
+// Oberfläche umschalten kann.
+function assignHost (room, roomCode, username, sid) {
+  room.hostUsername = username
+  hostSocketMap.set(roomCode, sid)
+  io.to(sid).emit('hostAssigned', { roomCode })
+  sendPendingRejoinsToHost(roomCode)
+}
+
+// roomState an alle Sockets eines Raums. Solange im Bingo Antworten geheim
+// sind, bekommt jeder Empfänger seinen eigenen Zuschnitt (nur die Antwort
+// des eigenen Teams), sonst geht derselbe Payload an alle. Synchron über den
+// Adapter, damit die Reihenfolge zu anderen Events (z. B. cardDrawn) bleibt.
+function emitRoomState (roomCode) {
+  const state = getRoomBroadcastState(roomCode)
+  if (!state) return
+  if (!roomStateNeedsViewer(roomCode)) {
+    io.to(roomCode).emit('roomState', state)
+    return
+  }
+  const sids = io.sockets.adapter.rooms.get(roomCode)
+  if (!sids) return
+  for (const sid of sids) {
+    const s = io.sockets.sockets.get(sid)
+    if (!s) continue
+    s.emit('roomState', roomStateForViewer(state, roomCode, s.username))
+  }
+}
+
+// Raum samt aller zugehörigen Timer und Zuordnungen abräumen.
+function cleanupRoom (roomCode) {
+  deleteRoom(roomCode)
+  hostSocketMap.delete(roomCode)
+  pendingRejoins.delete(roomCode)
+  const timer = roomCleanupTimers.get(roomCode)
+  if (timer) clearTimeout(timer)
+  roomCleanupTimers.delete(roomCode)
+  for (const [key, timerId] of pendingRemovals.entries()) {
+    if (key.endsWith(`:${roomCode}`)) {
+      clearTimeout(timerId)
+      pendingRemovals.delete(key)
+    }
+  }
+}
+
+// Lobby: Ein getrenntes Mitglied nach 20 Sekunden Karenz aus seinem Slot
+// nehmen, wenn es bis dahin nicht zurück ist. Ein noch laufender Timer
+// (zweiter Tab, der vorher ging) wird ersetzt, nicht verwaist liegen gelassen.
+// Im laufenden Spiel und in der Siegerehrung bleibt der Slot (slotsFrozen).
+function scheduleLobbyRemoval (roomCode, username) {
+  const removalKey = `${username}:${roomCode}`
+  if (pendingRemovals.has(removalKey)) {
+    clearTimeout(pendingRemovals.get(removalKey))
+  }
+  const timerId = setTimeout(() => {
+    try {
+      pendingRemovals.delete(removalKey)
+      const r = getRoom(roomCode)
+      if (!r || slotsFrozen(r)) return
+      // Inzwischen wieder verbunden (ohne joinRoom, oder joinRoom lief vor
+      // diesem disconnect): nicht entfernen.
+      if (otherSocketOfUser(username, roomCode, null)) return
+      removePlayerFromRoom(roomCode, username)
+      console.log(`[Karenz] ${username} aus Raum ${roomCode} entfernt (Timeout)`)
+      if (getRoom(roomCode)) {
+        emitRoomState(roomCode)
+      } else {
+        cleanupRoom(roomCode)
+      }
+    } catch (err) {
+      console.error('[Karenz] Fehler beim verzögerten Entfernen:', err)
+    }
+  }, 20000)
+  pendingRemovals.set(removalKey, timerId)
+}
+
+// Zurück in der Lobby nach einem Spiel: Seit leaveRoom im laufenden Spiel
+// den Slot stehen lässt, bleiben Slots übrig, deren Mitglieder längst weg
+// sind. Slots ohne verbundenes Mitglied fallen deshalb sofort heraus.
+// Unverbundene Mitglieder eines verbliebenen Teams bekommen die übliche
+// Karenz wie bei einem Abbruch in der Lobby. Ist danach weder ein Slot noch
+// ein Socket übrig, wird der Raum abgeräumt.
+function pruneDisconnectedSlots (room, roomCode) {
+  const vorher = room.players || []
+  const gewaehlt = room.settings?.startingPlayer
+  const gewaehlterSlot = Number.isInteger(gewaehlt) ? vorher[gewaehlt]?.slotId : undefined
+  room.players = vorher.filter((slot) => slotHasConnectedMember(slot, roomCode))
+  // Der gewählte Startspieler ist ein Index in room.players. Er soll auf
+  // denselben Slot zeigen, und ohne ihn wird beim Start ausgelost.
+  if (room.players.length !== vorher.length && Number.isInteger(gewaehlt)) {
+    const idx = room.players.findIndex((p) => p.slotId === gewaehlterSlot)
+    room.settings.startingPlayer = idx >= 0 ? idx : null
+  }
+  for (const slot of room.players) {
+    for (const member of slot.members || []) {
+      if (!otherSocketOfUser(member, roomCode, null)) scheduleLobbyRemoval(roomCode, member)
+    }
+  }
+  if (room.players.length === 0 && !roomHasSockets(roomCode, null)) {
+    cleanupRoom(roomCode)
+  }
+}
+
+// Laufendes Spiel ohne verbundene Sockets nach der Karenz löschen. Kommt
+// vorher jemand zurück (joinRoom), wird der Timer abgebrochen. Ergebnisse
+// sind zu diesem Zeitpunkt schon verbucht (oder nie gemeldet worden), außerhalb
+// des Raums geht also nichts verloren.
+function scheduleRoomCleanup (roomCode) {
+  const alt = roomCleanupTimers.get(roomCode)
+  if (alt) clearTimeout(alt)
+  const timerId = setTimeout(() => {
+    try {
+      roomCleanupTimers.delete(roomCode)
+      if (!getRoom(roomCode)) return
+      if (roomHasSockets(roomCode, null)) return
+      cleanupRoom(roomCode)
+      console.log(`[Aufräumen] Raum ${roomCode} ohne Verbindungen gelöscht`)
+    } catch (err) {
+      console.error('[Aufräumen] Fehler beim Löschen des Raums:', err)
+    }
+  }, ROOM_CLEANUP_MS)
+  roomCleanupTimers.set(roomCode, timerId)
+}
+
+// Versionen eines Raums fürs Log. Eigene und freigegebene Versionen tragen
+// intern nur eine Kennung (custom-…, shared-…), deshalb mit Namen aus
+// customVersionsMeta. Im Battle-Modus wählt jeder Slot selbst, dann pro Slot.
+function describeVersions (room) {
+  const meta = room?.settings?.customVersionsMeta || {}
+  const name = (pool) => {
+    const label = meta[pool]?.label
+    return label ? `${label} (${pool})` : pool
+  }
+  if (room?.settings?.gameMode === 'battle') {
+    const proSlot = (room.players || []).map((p) => `${p.slotName}: ${p.pool ? name(p.pool) : '-'}`)
+    return proSlot.length ? proSlot.join(', ') : 'keine'
+  }
+  const pools = Array.isArray(room?.settings?.songPools) ? room.settings.songPools : []
+  return pools.length ? pools.map(name).join(', ') : 'keine'
+}
+
+function cancelRoomCleanup (roomCode) {
+  const timerId = roomCleanupTimers.get(roomCode)
+  if (!timerId) return
+  clearTimeout(timerId)
+  roomCleanupTimers.delete(roomCode)
+}
 
 // Token-Validierung beim Verbindungsaufbau
 io.use((socket, next) => {
@@ -681,7 +1118,10 @@ io.on('connection', (socket) => {
       hostSocketMap.set(room.code, socket.id)
       socket.join(room.code)
       socket.emit('roomCreated', { roomCode: room.code })
-      console.log(`Raum ${room.code} von ${socket.username} erstellt`)
+      console.log(
+        `Raum ${room.code} von ${socket.username} erstellt` +
+        ` (Modus ${room.settings?.gameMode || 'normal'}, Versionen: ${describeVersions(room)})`
+      )
     } catch (err) {
       console.error('[createRoom] Fehler:', err)
       socket.emit('error', { message: 'Fehler beim Erstellen des Raums' })
@@ -690,48 +1130,187 @@ io.on('connection', (socket) => {
 
   // ── Raum nachschlagen (ohne beizutreten) ────────────────────────────────────
   socket.on('lookupRoom', ({ roomCode } = {}, callback) => {
-    const code = (roomCode || '').toUpperCase().trim()
-    const info = getRoomPublicInfo(code)
-    if (!info) {
-      if (typeof callback === 'function') callback({ error: `Raum "${code}" nicht gefunden` })
-      return
+    try {
+      const code = (roomCode || '').toUpperCase().trim()
+      const info = getRoomPublicInfo(code)
+      if (!info) {
+        if (typeof callback === 'function') callback({ error: `Raum "${code}" nicht gefunden` })
+        return
+      }
+      if (slotsFrozen(getRoom(code))) {
+        // Wer im laufenden Spiel noch einen Platz hat (App geschlossen, Tab
+        // zu), darf zurück, braucht dafür aber die Freigabe des Hosts
+        // (requestRejoin). Alle anderen bleiben draußen. Während der
+        // Siegerehrung gilt dasselbe, bis der Host zur Lobby wechselt.
+        const meinSlot = getRoom(code)?.players.find((p) => (p.members || []).includes(socket.username))
+        if (!meinSlot) {
+          const msg = info.gameStarted
+            ? 'Das Spiel in diesem Raum hat bereits begonnen'
+            : 'In diesem Raum läuft gerade noch die Siegerehrung. Versuch es gleich noch einmal.'
+          if (typeof callback === 'function') callback({ error: msg })
+          return
+        }
+        if (typeof callback === 'function') {
+          callback({ ...info, rejoin: true, mySlotId: meinSlot.slotId, mySlotName: meinSlot.slotName })
+        }
+        return
+      }
+      if (typeof callback === 'function') callback(info)
+    } catch (err) {
+      console.error('[lookupRoom] Fehler:', err)
+      if (typeof callback === 'function') callback({ error: 'Interner Fehler' })
     }
-    if (info.gameStarted) {
-      if (typeof callback === 'function') callback({ error: 'Das Spiel in diesem Raum hat bereits begonnen' })
-      return
-    }
-    if (typeof callback === 'function') callback(info)
   })
 
-  // ── Raum beitreten ──────────────────────────────────────────────────────────
-  socket.on('joinRoom', async ({ roomCode, slotId, slotName } = {}, callback) => {
+  // ── Rückkehr in ein laufendes Spiel anfragen ────────────────────────────────
+  // Nur für Mitglieder eines Slots. Ist ein Host verbunden, entscheidet er.
+  // Ist keiner verbunden (auch wenn der Anfragende selbst der gemerkte Host
+  // ist), gibt es niemanden, der freigeben könnte: Die Rückkehr wird dann
+  // sofort erlaubt, und der Beitretende übernimmt die Host-Rolle (joinRoom).
+  // Den Spielstand holt er sich aus room.gameState im roomState.
+  socket.on('requestRejoin', ({ roomCode } = {}, callback) => {
+    const antworte = (payload) => { if (typeof callback === 'function') callback(payload) }
     try {
       const code = (roomCode || '').toUpperCase().trim()
       const room = getRoom(code)
-      if (!room) {
-        const msg = `Raum "${code}" nicht gefunden`
-        socket.emit('error', { message: msg })
-        if (typeof callback === 'function') callback({ error: msg })
-        return
+      if (!room) return antworte({ error: `Raum "${code}" nicht gefunden` })
+      if (!slotsFrozen(room)) return antworte({ error: 'Das Spiel in diesem Raum läuft nicht mehr' })
+      const meinSlot = room.players.find((p) => (p.members || []).includes(socket.username))
+      if (!meinSlot) return antworte({ error: 'Du hast in diesem Spiel keinen Platz' })
+      // Derselbe Nutzer ist schon im Raum (anderer Tab, oder dieser Socket
+      // selbst): nichts freizugeben, der Beitritt ist ein normaler Reconnect.
+      if (socketUserMap.get(socket.id)?.roomCode === code || otherSocketOfUser(socket.username, code, socket.id)) {
+        return antworte({ approved: true })
       }
+      if (!roomHasConnectedHost(code)) {
+        grantRejoin(room, socket.username)
+        closePendingRejoin(code, socket.username)
+        console.log(`Rückkehr von ${socket.username} in Raum ${code} automatisch freigegeben (kein Host verbunden)`)
+        return antworte({ approved: true })
+      }
+      let anfragen = pendingRejoins.get(code)
+      if (!anfragen) {
+        anfragen = new Map()
+        pendingRejoins.set(code, anfragen)
+      }
+      // Eine ältere Anfrage desselben Nutzers (anderer Tab, neu verbunden)
+      // wird ersetzt, damit die Antwort an den Socket geht, der wartet.
+      anfragen.set(socket.username, { sid: socket.id, slotName: meinSlot.slotName })
+      io.to(hostSocketMap.get(code)).emit('rejoinRequest', {
+        roomCode: code,
+        username: socket.username,
+        slotName: meinSlot.slotName
+      })
+      antworte({ pending: true })
+      console.log(`${socket.username} bittet um Rückkehr in Raum ${code}`)
+    } catch (err) {
+      console.error('[requestRejoin] Fehler:', err)
+      antworte({ error: 'Interner Fehler' })
+    }
+  })
+
+  // ── Rückkehr-Anfrage zurückziehen ───────────────────────────────────────────
+  socket.on('cancelRejoin', ({ roomCode } = {}, callback) => {
+    try {
+      const code = (roomCode || '').toUpperCase().trim()
+      closePendingRejoin(code, socket.username, { notifyHost: true })
+      if (typeof callback === 'function') callback({ success: true })
+    } catch (err) {
+      console.error('[cancelRejoin] Fehler:', err)
+      if (typeof callback === 'function') callback({ error: 'Interner Fehler' })
+    }
+  })
+
+  // ── Host: Rückkehr-Anfrage beantworten ──────────────────────────────────────
+  // Nur der aktuelle Host-Socket darf antworten. Der Raum kommt aus der
+  // Zuordnung des Sockets, nicht aus dem Payload.
+  socket.on('host:answerRejoin', ({ username, accept } = {}, callback) => {
+    const antworte = (payload) => { if (typeof callback === 'function') callback(payload) }
+    try {
+      const code = socketUserMap.get(socket.id)?.roomCode
+      if (!code || hostSocketMap.get(code) !== socket.id) {
+        return antworte({ error: 'Nur der Host kann Anfragen beantworten' })
+      }
+      const eintrag = closePendingRejoin(code, username)
+      if (!eintrag) return antworte({ error: 'Anfrage nicht mehr offen' })
+      // Die Freigabe gilt genau einen Beitritt (joinRoom verbraucht sie).
+      const room = getRoom(code)
+      if (accept && room) grantRejoin(room, username)
+      io.to(eintrag.sid).emit('rejoinAnswer', { roomCode: code, accepted: !!accept })
+      antworte({ success: true })
+      console.log(`Rückkehr von ${username} in Raum ${code} ${accept ? 'freigegeben' : 'abgelehnt'}`)
+    } catch (err) {
+      console.error('[host:answerRejoin] Fehler:', err)
+      antworte({ error: 'Interner Fehler' })
+    }
+  })
+
+  // ── Raum beitreten ──────────────────────────────────────────────────────────
+  // Fehler gehen an den Callback, wenn es einen gibt, sonst als 'error'-Event.
+  // Beides zugleich zeigte die Meldung in der App doppelt an.
+  socket.on('joinRoom', async ({ roomCode, slotId, slotName } = {}, callback) => {
+    const fehler = (msg) => {
+      if (typeof callback === 'function') callback({ error: msg })
+      else socket.emit('error', { message: msg })
+    }
+    try {
+      const code = (roomCode || '').toUpperCase().trim()
+      const room = getRoom(code)
+      if (!room) return fehler(`Raum "${code}" nicht gefunden`)
+      // Laufendes Spiel (oder Siegerehrung): nur wer schon einen Slot hat,
+      // kommt hinein (Reconnect nach Neuladen oder Netzabbruch, oder Rückkehr
+      // nach Freigabe). Neue Slots kennt der Spielstand des Hosts nicht,
+      // deshalb hier abweisen.
+      const frozen = slotsFrozen(room)
+      const isMember = room.players.some((p) => (p.members || []).includes(socket.username))
+      if (frozen && !isMember) {
+        return fehler(room.gameStarted
+          ? 'Das Spiel in diesem Raum hat bereits begonnen'
+          : 'In diesem Raum läuft gerade noch die Siegerehrung. Versuch es gleich noch einmal.')
+      }
+      // Wer bewusst gegangen ist, braucht für die Rückkehr eine Freigabe
+      // (Host oder automatisch, siehe requestRejoin). Ein anderer Socket
+      // desselben Nutzers im Raum zählt als „noch da“.
+      const leftOnPurpose = frozen && room.leftMembers?.has(socket.username) &&
+        !otherSocketOfUser(socket.username, code, socket.id)
+      if (leftOnPurpose && !room.rejoinGrants?.has(socket.username)) {
+        return fehler('Du hast den Raum verlassen. Tritt über „Zurück ins Spiel“ wieder bei, der Host muss zustimmen.')
+      }
+      // Die Freigabe gilt einmal. Auch eine ungenutzte (Reconnect ohne
+      // vorheriges Verlassen) verfällt, sonst käme der Nutzer nach einem
+      // späteren Verlassen ohne neue Zustimmung zurück.
+      room.rejoinGrants?.delete(socket.username)
+      room.leftMembers?.delete(socket.username)
       // Ausstehende Entfernung abbrechen falls Spieler reconnectet
       const removalKey = `${socket.username}:${code}`
       if (pendingRemovals.has(removalKey)) {
         clearTimeout(pendingRemovals.get(removalKey))
         pendingRemovals.delete(removalKey)
       }
+      // Ebenso das Aufräumen eines verwaisten laufenden Spiels.
+      cancelRoomCleanup(code)
       // Der Aufrufer hat einen Slot explizit angegeben (slotId=<num> für
       // vorhandenes Team, slotId=null für neuen eigenen Slot). In beiden
       // Fällen soll die Wahl gelten – also aus einem eventuell noch
       // existierenden alten Slot entfernen (damit z.B. „Team verlassen und
       // als eigener Spieler joinen" tatsächlich funktioniert).
-      const explicitSlotChoice = slotId !== undefined
+      // Im laufenden Spiel gilt die Wahl nicht: Ein Slotwechsel würde den
+      // Spieler aus seinem Slot nehmen, den der Spielstand des Hosts kennt.
+      // Dort ist jeder Beitritt ein reiner Reconnect.
+      const explicitSlotChoice = slotId !== undefined && !frozen
       if (explicitSlotChoice) {
+        // Ziel-Team erst prüfen, bevor der alte Slot aufgelöst wird. Sonst
+        // stünde der Spieler bei einem verschwundenen Team ohne Platz da.
+        if (typeof slotId === 'number' && !room.players.some((p) => p.slotId === slotId)) {
+          return fehler(`Beitritt zu Raum "${code}" nicht möglich`)
+        }
         const currentSlot = room.players.find((p) => p.members.includes(socket.username))
         const targetIsSame =
           typeof slotId === 'number' && currentSlot && currentSlot.slotId === slotId
         if (currentSlot && !targetIsSame) {
-          removePlayerFromRoom(code, socket.username)
+          // `keepRoom`: Ist der Wechselnde das einzige Mitglied, wäre der
+          // Raum sonst gelöscht, bevor er im neuen Slot steht.
+          removePlayerFromRoom(code, socket.username, { keepRoom: true })
         }
       }
       // Ohne explizite Wahl: reiner Reconnect-Fall – wenn der Nutzer noch
@@ -740,25 +1319,35 @@ io.on('connection', (socket) => {
       if (!alreadyInSlot) {
         const added = addPlayerToSlot(code, socket.username, slotId ?? null, slotName || socket.username)
         if (!added) {
-          const msg = `Beitritt zu Raum "${code}" nicht möglich`
-          socket.emit('error', { message: msg })
-          if (typeof callback === 'function') callback({ error: msg })
-          return
+          // Nichts hinzugefügt und der Raum ist jetzt leer: wie beim
+          // normalen Entfernen abräumen, wenn auch niemand verbunden ist.
+          if (room.players.length === 0 && !roomHasSockets(code, null)) cleanupRoom(code)
+          return fehler(`Beitritt zu Raum "${code}" nicht möglich`)
         }
       }
       socketUserMap.set(socket.id, { username: socket.username, roomCode: code })
       await socket.join(code)
-      // Host-Socket aktualisieren falls der Host beitritt
+      // Host-Socket aktualisieren falls der Host beitritt. Hat der Raum gar
+      // keinen verbundenen Host (Host hat verlassen, und beim Failover war
+      // niemand verbunden), übernimmt der Beitretende die Rolle.
       if (room.hostUsername === socket.username) {
         hostSocketMap.set(code, socket.id)
+        sendPendingRejoinsToHost(code)
+      } else if (!roomHasConnectedHost(code)) {
+        assignHost(room, code, socket.username, socket.id)
+        console.log(`[Failover] ${socket.username} übernimmt Host in Raum ${code} (kein Host verbunden)`)
       }
-      io.to(code).emit('roomState', getRoomBroadcastState(code))
+      // Ist der Nutzer jetzt drin (etwa per automatischem Reconnect eines
+      // anderen Tabs), erübrigt sich eine noch offene Rückkehr-Anfrage.
+      closePendingRejoin(code, socket.username, { notifyHost: true })
+      emitRoomState(code)
+      // Ein wieder verbundener Slot zählt im Bereit-Ablauf wieder mit.
+      updateSongReady(room, code)
       if (typeof callback === 'function') callback({ success: true })
       console.log(`${socket.username} ist Raum ${code} beigetreten (Slot: ${alreadyInSlot ? 'reconnect' : (slotId ?? 'neu')})`)
     } catch (err) {
       console.error('[joinRoom] Fehler:', err)
-      socket.emit('error', { message: 'Fehler beim Beitreten des Raums' })
-      if (typeof callback === 'function') callback({ error: 'Interner Fehler' })
+      fehler('Fehler beim Beitreten des Raums')
     }
   })
 
@@ -781,36 +1370,72 @@ io.on('connection', (socket) => {
         pendingRemovals.delete(removalKey)
       }
       // War der Ausscheidende Host? Dann Failover auf den nächsten
-      // verbundenen Spieler analog zum disconnect-Handler.
+      // verbundenen Spieler, mit derselben Suche wie im disconnect-Handler
+      // (alle Slots, alle Mitglieder). Ist keiner verbunden, bleibt der Raum
+      // ohne Host-Socket, und der nächste Beitretende übernimmt (joinRoom).
       const room = getRoom(code)
       const wasHost = room?.hostUsername === socket.username
-      removePlayerFromRoom(code, socket.username)
-      const stillExists = getRoom(code)
-      if (stillExists) {
-        if (wasHost && stillExists.players.length > 0) {
-          const newHostName = stillExists.players[0].members[0]
-          if (newHostName) {
-            for (const [sid, sInfo] of socketUserMap.entries()) {
-              if (sInfo.roomCode === code && sInfo.username === newHostName) {
-                stillExists.hostUsername = newHostName
-                hostSocketMap.set(code, sid)
-                io.to(sid).emit('hostAssigned', { roomCode: code })
-                break
-              }
-            }
-          }
-        }
-        io.to(code).emit('roomState', getRoomBroadcastState(code))
-      }
-      // Socket aus dem Room entfernen und Mapping aufräumen.
+      const frozen = slotsFrozen(room)
+      // Nur wer mit diesem Socket wirklich im Raum war, ist bewusst gegangen.
+      // Ältere Apps schicken leaveRoom auch vorsorglich vor einem Beitritt.
+      const warImRaum = info?.roomCode === code
+      // Socket zuerst aus dem Raum nehmen, damit alle folgenden Prüfungen
+      // (Host-Nachfolger, Bereit-Ablauf, Bingo) ihn nicht mehr mitzählen.
       try {
         socket.leave(code)
       } catch (err) {
         // Bereits verlassen / kein aktives Room-Mitglied -> ignorieren.
         void err
       }
-      if (info?.roomCode === code) {
+      if (warImRaum) {
         socketUserMap.set(socket.id, { username: socket.username, roomCode: '' })
+      }
+      // Im laufenden Spiel bleibt der Slot stehen: Der Spielstand des Hosts
+      // kennt ihn, und wer geht, soll per Raumcode zurückkommen können (mit
+      // Freigabe des Hosts, siehe requestRejoin). Gelöscht hat ihn vorher
+      // nicht nur der Knopf „Raum verlassen“, sondern auch der Beitritt einer
+      // älteren App, die vor jedem Beitritt als neuer Spieler erst
+      // leaveRoom schickt. Vor dem Spielstart wird der Slot wie bisher
+      // sofort aufgelöst, damit ein neuer Beitritt echte Slot-Wahl hat.
+      // Dasselbe gilt während der Siegerehrung (siehe slotsFrozen).
+      if (!frozen) {
+        removePlayerFromRoom(code, socket.username)
+      } else if (room && warImRaum && !otherSocketOfUser(socket.username, code, socket.id)) {
+        // Bewusst gegangen: Die Rückkehr braucht eine Freigabe (joinRoom).
+        markMemberLeft(room, socket.username)
+      }
+      const stillExists = getRoom(code)
+      if (stillExists) {
+        // War der Ausscheidende Host? Dann Failover auf den nächsten
+        // verbundenen Spieler, mit derselben Suche wie im disconnect-Handler
+        // (alle Slots, alle Mitglieder). Ist keiner verbunden, bleibt der Raum
+        // ohne Host-Socket, und der nächste Beitretende übernimmt (joinRoom).
+        // Offene Rückkehr-Anfragen kann dann niemand beantworten, sie werden
+        // freigegeben.
+        if (wasHost) {
+          const kandidat = findHostCandidate(stillExists, code, {
+            excludeUsername: socket.username,
+            excludeSid: socket.id
+          })
+          if (kandidat) {
+            assignHost(stillExists, code, kandidat.username, kandidat.sid)
+          } else {
+            hostSocketMap.delete(code)
+            autoApproveRejoins(stillExists, code)
+          }
+        }
+        if (frozen) {
+          // Auf diesen Slot wartet niemand mehr, wenn er jetzt unverbunden ist.
+          updateSongReady(stillExists, code, socket.id)
+          advanceStalledBingoRound(stillExists)
+        }
+        emitRoomState(code)
+        // Letzter verbundener Spieler eines laufenden Spiels: aufräumen planen.
+        if (frozen && !roomHasSockets(code, socket.id)) {
+          scheduleRoomCleanup(code)
+        }
+      } else {
+        cleanupRoom(code)
       }
       if (typeof callback === 'function') callback({ ok: true })
       console.log(`${socket.username} hat Raum ${code} verlassen (explizit)`)
@@ -831,6 +1456,9 @@ io.on('connection', (socket) => {
         socket.emit('error', { message: 'Nur der Host kann das Spiel starten' })
         return
       }
+      // Doppelklick auf „Starten“: Der zweite Aufruf würde neu auslosen, und
+      // die Clients sähen zwei verschiedene Startspieler.
+      if (room.gameStarted) return
       // Im Battle-Modus: alle Slots muessen eine Version gewaehlt haben
       // und keine Version doppelt vorkommen.
       if (room.settings?.gameMode === 'battle') {
@@ -867,8 +1495,16 @@ io.on('connection', (socket) => {
       room.startingPlayerWasRandom = ausgelost
 
       room.gameStarted = true
+      room.gameOver = false
+      // Neues Spiel: kein offener Bereit-Ablauf, keine Rückkehr-Vermerke aus
+      // einer Vorrunde.
+      clearSongReady(room)
+      clearRejoinState(room)
       // Für Statistiken: Ergebnis-Guard für dieses Spiel zurücksetzen.
       room.resultRecorded = false
+      // Spielstand der Vorrunde verwerfen. Sonst übernähme ein neu geladener
+      // Host oder ein Nachfolger beim Failover vor dem ersten Sync den alten.
+      room.gameState = null
       // WICHTIG: broadcastState verwenden – enthält memberAvatars, damit
       // Game.vue die Profilbilder der Mitspieler beim Start hat. Der rohe
       // getRoom()-Payload hätte kein memberAvatars → Avatar-Fallback-Icon.
@@ -877,10 +1513,11 @@ io.on('connection', (socket) => {
         startingPlayer: room.startingPlayer,
         startingPlayerWasRandom: room.startingPlayerWasRandom
       })
-      io.to(info.roomCode).emit('roomState', getRoomBroadcastState(info.roomCode))
+      emitRoomState(info.roomCode)
       console.log(
         `Spiel in Raum ${info.roomCode} gestartet, Startspieler ${room.startingPlayer}` +
-        `${room.startingPlayerWasRandom ? ' (ausgelost)' : ' (vom Host gewaehlt)'}`
+        `${room.startingPlayerWasRandom ? ' (ausgelost)' : ' (vom Host gewaehlt)'}` +
+        `, Modus ${room.settings?.gameMode || 'normal'}, Versionen: ${describeVersions(room)}`
       )
     } catch (err) {
       console.error('[host:startGame] Fehler:', err)
@@ -898,7 +1535,7 @@ io.on('connection', (socket) => {
         return
       }
       if (room.audioMode === 'all-clients') {
-        // Ready-Tracking initialisieren
+        // Ready-Tracking initialisieren. Gezählt werden nur verbundene Slots.
         room.pendingSongUrl = songUrl
         room.songReadySlots = new Set()
         io.to(info.roomCode).emit('cardDrawn', {
@@ -906,9 +1543,13 @@ io.on('connection', (socket) => {
           cardData,
           audioMode: room.audioMode,
           waitForReady: true,
-          totalPlayers: room.players.length
+          totalPlayers: songReadyCounts(room, info.roomCode).totalCount
         })
       } else {
+        // Ein Rest aus einer früheren Karte im Modus „Alle Geräte“ darf
+        // nicht stehen bleiben, sonst meldet der roomState weiter einen
+        // offenen Bereit-Ablauf.
+        clearSongReady(room)
         io.to(info.roomCode).emit('cardDrawn', {
           songUrl,
           cardData,
@@ -928,20 +1569,13 @@ io.on('connection', (socket) => {
       const room = getRoom(info.roomCode)
       if (!room || !room.pendingSongUrl || !room.songReadySlots) return
 
-      const slotIndex = room.players.findIndex(p => p.members.includes(socket.username))
-      if (slotIndex === -1) return
+      const slot = room.players.find(p => p.members.includes(socket.username))
+      if (!slot) return
 
-      room.songReadySlots.add(slotIndex)
-      io.to(info.roomCode).emit('song:readyUpdate', {
-        readyCount: room.songReadySlots.size,
-        totalCount: room.players.length
-      })
-
-      if (room.songReadySlots.size >= room.players.length) {
-        io.to(info.roomCode).emit('song:openNow', { songUrl: room.pendingSongUrl })
-        room.pendingSongUrl = null
-        room.songReadySlots = null
-      }
+      // Set entdoppelt: Ein Client schickt seine Bestätigung nach einem
+      // Reconnect erneut.
+      room.songReadySlots.add(slot.slotId)
+      updateSongReady(room, info.roomCode)
     } catch (err) {
       console.error('[player:songReady] Fehler:', err)
     }
@@ -956,20 +1590,32 @@ io.on('connection', (socket) => {
       if (!room || room.hostUsername !== socket.username) return
       if (!gameState || typeof gameState !== 'object') return
       room.gameState = gameState
-      socket.to(info.roomCode).emit('stateUpdate', { gameState })
+      // Bingo: Titel/Künstler/Jahr der gezogenen Karte bis zur Auflösung
+      // nicht an die Gäste geben (siehe sanitizeGameStateForGuests).
+      socket.to(info.roomCode).emit('stateUpdate', {
+        gameState: sanitizeGameStateForGuests(room, gameState)
+      })
     } catch (err) {
       console.error('[host:syncState] Fehler:', err)
     }
   })
 
   // ── Gast: aktuellen State vom Server anfordern ─────────────────────────
+  // Zusätzlich zum Spielstand bekommt der Anfragende den Stand des Bereit-
+  // Ablaufs (all-clients), auch ohne Spielstand. Sonst hängt ein Gast, der
+  // nach `cardDrawn` neu lädt, ohne Song und ohne Bereit-Knopf da.
   socket.on('guest:requestSync', () => {
     try {
       const info = socketUserMap.get(socket.id)
       if (!info) return
       const room = getRoom(info.roomCode)
-      if (!room?.gameState) return
-      socket.emit('stateUpdate', { gameState: room.gameState })
+      if (!room) return
+      socket.emit('songReady:state', {
+        pending: !!room.pendingSongUrl,
+        songUrl: room.pendingSongUrl || null
+      })
+      if (!room.gameState) return
+      socket.emit('stateUpdate', { gameState: sanitizeGameStateForGuests(room, room.gameState) })
     } catch (err) {
       console.error('[guest:requestSync] Fehler:', err)
     }
@@ -984,7 +1630,9 @@ io.on('connection', (socket) => {
       if (!room || room.hostUsername !== socket.username) return
       if (!['host-only', 'all-clients'].includes(audioMode)) return
       room.audioMode = audioMode
-      io.to(info.roomCode).emit('roomState', getRoomBroadcastState(info.roomCode))
+      // Ein offener Bereit-Ablauf gehört zum alten Modus.
+      clearSongReady(room)
+      emitRoomState(info.roomCode)
       console.log(`Audio-Modus in Raum ${info.roomCode} auf "${audioMode}" geändert`)
     } catch (err) {
       console.error('[host:setAudioMode] Fehler:', err)
@@ -1008,7 +1656,7 @@ io.on('connection', (socket) => {
         if (!Number.isInteger(idx) || idx < 0 || idx >= room.players.length) return
         room.settings.startingPlayer = idx
       }
-      io.to(info.roomCode).emit('roomState', getRoomBroadcastState(info.roomCode))
+      emitRoomState(info.roomCode)
     } catch (err) {
       console.error('[host:setStartingPlayer] Fehler:', err)
     }
@@ -1058,7 +1706,7 @@ io.on('connection', (socket) => {
       // konnten Gäste beim Neustart im ALTEN Modus bleiben, obwohl der
       // Host mittlerweile einen anderen ausgewählt hatte.
       socket.to(info.roomCode).emit('returnToLobby', { roomCode: info.roomCode })
-      io.to(info.roomCode).emit('roomState', getRoomBroadcastState(info.roomCode))
+      emitRoomState(info.roomCode)
       console.log(`Spielmodus in Raum ${info.roomCode} geändert: ${prev} → ${normalized}`)
     } catch (err) {
       console.error('[host:setGameMode] Fehler:', err)
@@ -1082,7 +1730,7 @@ io.on('connection', (socket) => {
         bingosToWin: bingosToWin ?? room.settings.bingosToWin,
       })
       room.settings = { ...room.settings, ...merged }
-      io.to(info.roomCode).emit('roomState', getRoomBroadcastState(info.roomCode))
+      emitRoomState(info.roomCode)
     } catch (err) {
       console.error('[host:setBingoSettings] Fehler:', err)
     }
@@ -1107,8 +1755,8 @@ io.on('connection', (socket) => {
         songPools,
         customVersionsMeta: { ...(room.settings?.customVersionsMeta || {}), ...meta }
       }
-      io.to(info.roomCode).emit('roomState', getRoomBroadcastState(info.roomCode))
-      console.log(`Song-Pools in Raum ${info.roomCode} geändert: ${songPools.join(', ')}`)
+      emitRoomState(info.roomCode)
+      console.log(`Song-Pools in Raum ${info.roomCode} geändert: ${describeVersions(room)}`)
     } catch (err) {
       console.error('[host:setSongPools] Fehler:', err)
     }
@@ -1135,7 +1783,7 @@ io.on('connection', (socket) => {
           customVersionsMeta: { ...(room.settings?.customVersionsMeta || {}), [pool]: versionMeta }
         }
       }
-      io.to(info.roomCode).emit('roomState', getRoomBroadcastState(info.roomCode))
+      emitRoomState(info.roomCode)
       console.log(`Battle-Pool in Raum ${info.roomCode} von ${socket.username} auf "${pool}" gesetzt`)
     } catch (err) {
       console.error('[player:setSlotPool] Fehler:', err)
@@ -1152,7 +1800,7 @@ io.on('connection', (socket) => {
       const slot = room.players.find(p => p.slotId === slotId)
       if (slot) {
         slot.score = Math.max(0, (slot.score || 0) + Number(delta || 0))
-        io.to(info.roomCode).emit('roomState', getRoomBroadcastState(info.roomCode))
+        emitRoomState(info.roomCode)
       }
     } catch (err) {
       console.error('[host:givePoints] Fehler:', err)
@@ -1169,24 +1817,29 @@ io.on('connection', (socket) => {
       const slot = room.players.find(p => p.slotId === slotId)
       if (slot) {
         slot.objections = (slot.objections || 0) + 1
-        io.to(info.roomCode).emit('roomState', getRoomBroadcastState(info.roomCode))
+        emitRoomState(info.roomCode)
       }
     } catch (err) {
       console.error('[host:addObjection] Fehler:', err)
     }
   })
 
-  // Helper: Leitet ein Gast-Event an den Host weiter oder sendet Fehler an den Gast
+  // Helper: Leitet ein Gast-Event an den Host weiter oder sendet Fehler an den Gast.
+  // `fromSlotIndex` ist der Slot des Absenders laut Server (nicht vom Client
+  // behauptet). Wer in keinem Slot steht (Zuschauer, schon entfernt), darf
+  // keine Spielaktionen auslösen. Ob der Slot gerade am Zug ist, prüft der Host.
   const forwardToHost = (eventName, socket, extraData = {}) => {
     const info = socketUserMap.get(socket.id)
     if (!info) return
     const room = getRoom(info.roomCode)
     if (!room || room.hostUsername === socket.username) return
+    const fromSlotIndex = room.players.findIndex((p) => (p.members || []).includes(socket.username))
+    if (fromSlotIndex === -1) return
     const hostSocketId = hostSocketMap.get(info.roomCode)
     if (hostSocketId) {
-      io.to(hostSocketId).emit(eventName, { fromUsername: socket.username, ...extraData })
+      io.to(hostSocketId).emit(eventName, { ...extraData, fromUsername: socket.username, fromSlotIndex })
     } else {
-      socket.emit('error', { message: 'Host ist nicht verbunden – Aktion fehlgeschlagen' })
+      socket.emit('error', { message: 'Der Host ist gerade nicht verbunden, die Aktion ging nicht durch.' })
     }
   }
 
@@ -1272,9 +1925,10 @@ io.on('connection', (socket) => {
   })
 
   // ── Gast: Rateeingabe an Host senden ─────────────────────────────────────
-  socket.on('guest:submitGuess', ({ title, artist, year } = {}) => {
+  // `movie` gehört dazu: Ohne ihn bekämen Gäste im Film-Modus nie Filmpunkte.
+  socket.on('guest:submitGuess', ({ title, artist, year, movie } = {}) => {
     try {
-      forwardToHost('guest:submitGuess', socket, { title, artist, year })
+      forwardToHost('guest:submitGuess', socket, { title, artist, year, movie })
     } catch (err) {
       console.error('[guest:submitGuess] Fehler:', err)
     }
@@ -1308,6 +1962,11 @@ io.on('connection', (socket) => {
   })
 
   // ── Host: Spiel beendet – gameStarted zurücksetzen ────────────────────────
+  // Auf dem Siegerbildschirm ist das Spiel nicht mehr „gestartet“, die Slots
+  // bleiben aber fest (`gameOver`, siehe slotsFrozen): Beitritte, Verlassen
+  // und Verbindungsabbrüche verändern die Slot-Liste nicht, bis der Host zur
+  // Lobby wechselt oder eine neue Runde startet. Sonst verschöbe sich die
+  // Liste, und eine neue Runde mit demselben Spielstand passte nicht mehr.
   socket.on('host:gameEnded', () => {
     try {
       const info = socketUserMap.get(socket.id)
@@ -1315,7 +1974,9 @@ io.on('connection', (socket) => {
       const room = getRoom(info.roomCode)
       if (!room || room.hostUsername !== socket.username) return
       room.gameStarted = false
-      io.to(info.roomCode).emit('roomState', getRoomBroadcastState(info.roomCode))
+      room.gameOver = true
+      clearSongReady(room)
+      emitRoomState(info.roomCode)
     } catch (err) {
       console.error('[host:gameEnded] Fehler:', err)
     }
@@ -1368,6 +2029,15 @@ io.on('connection', (socket) => {
       const room = getRoom(info.roomCode)
       if (!room || room.hostUsername !== socket.username) return
       room.gameStarted = false
+      room.gameOver = false
+      clearSongReady(room)
+      clearRejoinState(room)
+      // Offene Rückkehr-Anfragen haben sich mit dem Spiel erledigt; wer will,
+      // tritt der Lobby normal bei.
+      for (const username of [...(pendingRejoins.get(info.roomCode)?.keys() || [])]) {
+        const eintrag = closePendingRejoin(info.roomCode, username)
+        if (eintrag) io.to(eintrag.sid).emit('rejoinAnswer', { roomCode: info.roomCode, accepted: true })
+      }
       // Bingo-Modus: bingoState mit-entsorgen, sonst spielt die nächste
       // Runde mit den ALTEN Karten/Marks/Bingo-Counts weiter
       // (`initBingoState` greift early-return, wenn `bingoState` schon
@@ -1376,7 +2046,10 @@ io.on('connection', (socket) => {
       // fühlt sich der Reset für den User „halb" an.
       delete room.bingoState
       socket.to(info.roomCode).emit('returnToLobby', { roomCode: info.roomCode })
-      io.to(info.roomCode).emit('roomState', getRoomBroadcastState(info.roomCode))
+      // Slots, die im Spiel nur stehen geblieben sind (Mitglieder gegangen
+      // oder getrennt), nicht in die nächste Runde mitnehmen.
+      pruneDisconnectedSlots(room, info.roomCode)
+      if (getRoom(info.roomCode)) emitRoomState(info.roomCode)
     } catch (err) {
       console.error('[host:returnToLobby] Fehler:', err)
     }
@@ -1403,8 +2076,13 @@ io.on('connection', (socket) => {
       const room = getRoom(info.roomCode)
       if (!room || room.hostUsername !== socket.username) return
       room.gameStarted = true
+      room.gameOver = false
+      clearSongReady(room)
+      // Neue Runde (Punkte behalten) ist ein neues Spiel für die Statistik.
+      // Ohne Reset verwürfe `host:recordGameResult` jedes weitere Ergebnis.
+      room.resultRecorded = false
       socket.to(info.roomCode).emit('gameRestarted')
-      io.to(info.roomCode).emit('roomState', getRoomBroadcastState(info.roomCode))
+      emitRoomState(info.roomCode)
     } catch (err) {
       console.error('[host:gameRestarted] Fehler:', err)
     }
@@ -1438,8 +2116,10 @@ io.on('connection', (socket) => {
     if (!room || room.settings?.gameMode !== 'bingo') return null
     return { room, code: info.roomCode }
   }
+  // Pro Empfänger zugeschnitten (Antworten anderer Teams bleiben bis zur
+  // Auflösung verborgen), siehe emitRoomState.
   const bingoBroadcast = (code) => {
-    io.to(code).emit('roomState', getRoomBroadcastState(code))
+    emitRoomState(code)
   }
 
   // Host startet eine neue Bingo-Runde (nachdem er lokal die Karte gezogen
@@ -1451,6 +2131,9 @@ io.on('connection', (socket) => {
       if (!ctx) return
       const result = startBingoRound(ctx.room, { songLink, songData })
       if (!result.ok) {
+        // Doppelklick auf „Runde starten": still ignorieren, die laufende
+        // Runde bleibt gültig und ein Fehler-Toast würde nur verwirren.
+        if (result.busy) return
         socket.emit('error', { message: result.reason || 'Bingo-Runde konnte nicht gestartet werden' })
         return
       }
@@ -1462,8 +2145,10 @@ io.on('connection', (socket) => {
 
   // Host: Reveal-Animation abgeschlossen → Antwortphase öffnen und Song
   // starten. Der Song wird über den bestehenden `cardDrawn`-Kanal
-  // verteilt (Audio-Modus wie in anderen MP-Modi).
-  socket.on('host:bingoOpenAnswering', ({ songUrl, cardData } = {}) => {
+  // verteilt (Audio-Modus wie in anderen MP-Modi). Anders als dort ohne
+  // `cardData`: Titel/Künstler/Jahr wären die Lösung der laufenden Runde.
+  // Die Songdaten kommen nach der Auflösung über `roomState`.
+  socket.on('host:bingoOpenAnswering', ({ songUrl } = {}) => {
     try {
       const ctx = bingoAssertHost()
       if (!ctx) return
@@ -1479,15 +2164,14 @@ io.on('connection', (socket) => {
           ctx.room.songReadySlots = new Set()
           io.to(ctx.code).emit('cardDrawn', {
             songUrl,
-            cardData,
             audioMode: ctx.room.audioMode,
             waitForReady: true,
-            totalPlayers: ctx.room.players.length
+            totalPlayers: songReadyCounts(ctx.room, ctx.code).totalCount
           })
         } else {
+          clearSongReady(ctx.room)
           io.to(ctx.code).emit('cardDrawn', {
             songUrl,
-            cardData,
             audioMode: ctx.room.audioMode
           })
         }
@@ -1512,6 +2196,22 @@ io.on('connection', (socket) => {
       // kann, wenn ein anderes Team parallel gerade tippt.
     } catch (err) {
       console.error('[team:bingoAnswer] Fehler:', err)
+    }
+  })
+
+  // Team gibt seine Antwort ab bzw. nimmt die Abgabe zum Ändern zurück.
+  socket.on('team:bingoConfirmAnswer', ({ confirmed, value } = {}) => {
+    try {
+      const ctx = bingoAssertMember()
+      if (!ctx) return
+      const result = confirmBingoTeamAnswer(ctx.room, socket.username, !!confirmed, value)
+      if (!result.ok) {
+        socket.emit('error', { message: result.reason || 'Antwort konnte nicht abgegeben werden' })
+        return
+      }
+      bingoBroadcast(ctx.code)
+    } catch (err) {
+      console.error('[team:bingoConfirmAnswer] Fehler:', err)
     }
   })
 
@@ -1588,10 +2288,11 @@ io.on('connection', (socket) => {
     try {
       const ctx = bingoAssertHost()
       if (!ctx) return
+      // Mit Sieg-Prüfung: Wer in dieser Runde seine letzte Reihe voll
+      // gemacht hat, gewinnt auch beim Überspringen (Phase 'finished').
       skipBingoRound(ctx.room)
       // Song-Ready-Flow zurücksetzen, falls gerade offen.
-      ctx.room.pendingSongUrl = null
-      ctx.room.songReadySlots = null
+      clearSongReady(ctx.room)
       socket.to(ctx.code).emit('host:confirmSkip')
       bingoBroadcast(ctx.code)
     } catch (err) {
@@ -1629,6 +2330,11 @@ io.on('connection', (socket) => {
   })
 
   // Host-Werkzeug: einzelnes Kreuz eines Teams setzen/entfernen (Korrektur).
+  // Führt das gesetzte Kreuz zum Sieg, stehen `winners` und Phase 'finished'
+  // schon im Raum; der Broadcast löst dann wie beim regulären Sieg die
+  // Siegeinblendung und Verbuchung auf den Clients aus. Nimmt ein entferntes
+  // Kreuz den Sieg zurück, ist `winners` wieder null und die Phase
+  // 'round-done'.
   socket.on('host:bingoSetCell', ({ slotId, cellIndex, marked } = {}) => {
     try {
       const ctx = bingoAssertHost()
@@ -1637,6 +2343,12 @@ io.on('connection', (socket) => {
       if (!result.ok) {
         socket.emit('error', { message: result.reason || 'Feld konnte nicht geändert werden' })
         return
+      }
+      // Ein zurückgenommener Sieg: Das Spiel läuft weiter. Stand der Raum
+      // schon in der Siegerehrung, gilt er wieder als laufendes Spiel.
+      if (result.winnersCleared && ctx.room.gameOver) {
+        ctx.room.gameOver = false
+        ctx.room.gameStarted = true
       }
       bingoBroadcast(ctx.code)
     } catch (err) {
@@ -1664,13 +2376,36 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     console.log(`[-] ${socket.username} getrennt (${socket.id})`)
     try {
-      const info = socketUserMap.get(socket.id)
-      if (info?.roomCode) {
-        const isHost = hostSocketMap.get(info.roomCode) === socket.id
-        if (isHost) {
-          hostSocketMap.delete(info.roomCode)
+      // Offene Rückkehr-Anfragen dieses Sockets zurückziehen. Der anfragende
+      // Socket steht noch nicht im Raum, die Suche über socketUserMap unten
+      // findet ihn also nicht.
+      for (const [rCode, anfragen] of [...pendingRejoins.entries()]) {
+        for (const [username, eintrag] of [...anfragen.entries()]) {
+          if (eintrag.sid === socket.id) {
+            closePendingRejoin(rCode, username, { notifyHost: true })
+          }
         }
-        const room = getRoom(info.roomCode)
+      }
+    } catch (err) {
+      console.error('[disconnect] Fehler beim Zurückziehen von Rückkehr-Anfragen:', err)
+    }
+    try {
+      const info = socketUserMap.get(socket.id)
+      // Gleich austragen: Die Prüfungen unten (Bereit-Ablauf, Bingo-Runde)
+      // fragen über socketUserMap, welche Slots noch verbunden sind.
+      socketUserMap.delete(socket.id)
+      if (info?.roomCode) {
+        const code = info.roomCode
+        // Derselbe Nutzer kann mit einem anderen Socket im Raum sein: zweiter
+        // Tab, oder der Client hat sich schon neu verbunden, bevor der alte
+        // Socket nach pingTimeout als getrennt gilt. Dann darf weder die Host-
+        // Rolle wandern noch die Karenz-Entfernung laufen.
+        const andererSocket = otherSocketOfUser(socket.username, code, socket.id)
+        const isHost = hostSocketMap.get(code) === socket.id
+        if (isHost) {
+          hostSocketMap.delete(code)
+        }
+        const room = getRoom(code)
         if (room) {
           // ── Sofortiger Host-Failover ─────────────────────────────────
           // Wenn der Host geht (Lobby ODER laufendes Spiel), soll der
@@ -1679,58 +2414,42 @@ io.on('connection', (socket) => {
           // ist steuerungslos. Reconnect kann später die Rolle wieder
           // korrekt zuordnen (siehe joinRoom -> hostUsername-Check).
           if (isHost && room.hostUsername === socket.username) {
-            // Nächster in Slot-Reihenfolge, der aktuell verbunden ist.
-            const candidateSlots = room.players || []
-            let newHostName = null
-            let newHostSid = null
-            for (const slot of candidateSlots) {
-              for (const member of slot.members || []) {
-                if (member === socket.username) continue
-                for (const [sid, sInfo] of socketUserMap.entries()) {
-                  if (sid === socket.id) continue
-                  if (sInfo.roomCode === info.roomCode && sInfo.username === member) {
-                    newHostName = member
-                    newHostSid = sid
-                    break
-                  }
-                }
-                if (newHostName) break
+            if (andererSocket) {
+              // Host ist noch verbunden, nur über einen anderen Socket.
+              hostSocketMap.set(code, andererSocket)
+              sendPendingRejoinsToHost(code)
+            } else {
+              // Nächster in Slot-Reihenfolge, der aktuell verbunden ist.
+              const kandidat = findHostCandidate(room, code, {
+                excludeUsername: socket.username,
+                excludeSid: socket.id
+              })
+              if (kandidat) {
+                assignHost(room, code, kandidat.username, kandidat.sid)
+                console.log(`[Failover] Sofortiger Host-Wechsel in Raum ${code}: ${kandidat.username}`)
+              } else {
+                // Niemand da, der offene Rückkehr-Anfragen beantworten könnte.
+                autoApproveRejoins(room, code)
               }
-              if (newHostName) break
-            }
-            if (newHostName && newHostSid) {
-              room.hostUsername = newHostName
-              hostSocketMap.set(info.roomCode, newHostSid)
-              console.log(`[Failover] Sofortiger Host-Wechsel in Raum ${info.roomCode}: ${newHostName}`)
-              // Neuen Host explizit informieren, damit er UI umschalten kann.
-              io.to(newHostSid).emit('hostAssigned', { roomCode: info.roomCode })
             }
           }
-          if (!room.gameStarted) {
-            const removalKey = `${socket.username}:${info.roomCode}`
-            const timerId = setTimeout(() => {
-              try {
-                pendingRemovals.delete(removalKey)
-                const r = getRoom(info.roomCode)
-                if (r && !r.gameStarted) {
-                  removePlayerFromRoom(info.roomCode, socket.username)
-                  console.log(`[Karenz] ${socket.username} aus Raum ${info.roomCode} entfernt (Timeout)`)
-
-                  const upd = getRoomBroadcastState(info.roomCode)
-                  if (upd) io.to(info.roomCode).emit('roomState', upd)
-                }
-              } catch (err) {
-                console.error('[Karenz] Fehler beim verzögerten Entfernen:', err)
-              }
-            }, 20000)
-            pendingRemovals.set(removalKey, timerId)
+          if (!slotsFrozen(room) && !andererSocket) {
+            scheduleLobbyRemoval(code, socket.username)
+          }
+          if (slotsFrozen(room)) {
+            // Auf einen jetzt unverbundenen Slot wartet niemand mehr.
+            updateSongReady(room, code, socket.id)
+            advanceStalledBingoRound(room)
+          }
+          // Laufendes Spiel (oder Siegerehrung), in dem jetzt niemand mehr
+          // verbunden ist: nach einer Karenz abräumen, sonst bleibt der Raum
+          // für immer im Speicher.
+          if (slotsFrozen(room) && !roomHasSockets(code, socket.id)) {
+            scheduleRoomCleanup(code)
           }
           // In jedem Fall: aktualisierten roomState broadcasten, damit der
           // neue Host-Wechsel bei allen Clients sofort sichtbar ist.
-          const updatedRoom = getRoomBroadcastState(info.roomCode)
-          if (updatedRoom) {
-            io.to(info.roomCode).emit('roomState', updatedRoom)
-          }
+          emitRoomState(code)
         }
       }
       socketUserMap.delete(socket.id)

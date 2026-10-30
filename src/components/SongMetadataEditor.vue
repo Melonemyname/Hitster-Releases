@@ -14,8 +14,8 @@
 
     <div
       v-if="filtered.length === 0"
-      class="text-caption q-py-md text-center"
-      style="opacity: 0.7"
+      class="text-caption text-muted q-py-md text-center"
+      role="status"
     >
       Kein Song gefunden.
     </div>
@@ -32,9 +32,11 @@
           aria-label="Vorheriger Song"
           @click="prev"
         />
-        <div class="col text-center overflow-hidden">
+        <!-- aria-live: Beim Blättern sagt ein Screenreader den neuen Song samt
+             Position an, sonst bekäme man vom Wechsel nichts mit. -->
+        <div class="col text-center overflow-hidden" aria-live="polite">
           <div class="text-subtitle1 ellipsis">{{ currentDisplayName }}</div>
-          <div class="text-caption" style="opacity: 0.7">
+          <div class="text-caption text-muted">
             {{ pos + 1 }} / {{ filtered.length }}
           </div>
         </div>
@@ -70,6 +72,7 @@
             dense
             outlined
             :label="f.label"
+            :hint="f.hint"
             @update:model-value="(val) => setField(f.key, val)"
           />
         </template>
@@ -108,28 +111,52 @@ export default {
     const search = ref("");
     const pos = ref(0);
 
-    // Gefilterte Songs mit ihrem Original-Index (für gezieltes Bearbeiten).
-    const filtered = computed(() => {
-      const q = search.value.trim().toLowerCase();
-      const list = (props.tracks || []).map((t, i) => ({ t, i }));
-      if (!q) return list;
-      return list.filter(({ t }) => {
-        const title = String(t.title || "").toLowerCase();
-        const artist = String(t.artist || "").toLowerCase();
-        return title.includes(q) || artist.includes(q);
+    // Original-Indizes der Songs, die zur Suche passen. Bewusst eingefroren
+    // und nur neu ermittelt, wenn sich der Suchbegriff oder die Anzahl der
+    // Songs ändert, nicht bei jeder Eingabe: Ändert man Titel oder Künstler so,
+    // dass der Song nicht mehr zur Suche passt, fiele er sonst aus der Liste,
+    // dieselbe Position zeigte auf einen anderen Song, und die nächsten
+    // Tastendrücke landeten dort.
+    const matchIndices = ref([]);
+    const computeMatches = () => {
+      const q = String(search.value || "")
+        .trim()
+        .toLowerCase();
+      const out = [];
+      (props.tracks || []).forEach((t, i) => {
+        if (q) {
+          const title = String(t.title || "").toLowerCase();
+          const artist = String(t.artist || "").toLowerCase();
+          if (!title.includes(q) && !artist.includes(q)) return;
+        }
+        out.push(i);
       });
-    });
+      matchIndices.value = out;
+    };
+    computeMatches();
 
-    // Position innerhalb der gefilterten Liste gültig halten.
+    // Gefilterte Songs mit ihrem Original-Index (für gezieltes Bearbeiten).
+    const filtered = computed(() =>
+      matchIndices.value
+        .map((i) => ({ t: (props.tracks || [])[i], i }))
+        .filter((entry) => entry.t),
+    );
+
+    // Neuer Suchbegriff: neu filtern und vorne anfangen.
+    watch(search, () => {
+      computeMatches();
+      pos.value = 0;
+    });
+    // Song entfernt oder per CSV ergänzt: Die Indizes haben sich verschoben,
+    // deshalb neu filtern und die Position gültig halten.
     watch(
-      () => filtered.value.length,
-      (len) => {
+      () => (props.tracks || []).length,
+      () => {
+        computeMatches();
+        const len = filtered.value.length;
         if (pos.value > len - 1) pos.value = Math.max(0, len - 1);
       },
     );
-    watch(search, () => {
-      pos.value = 0;
-    });
 
     const current = computed(() => filtered.value[pos.value] || null);
 
@@ -154,8 +181,11 @@ export default {
       if (!entry) return;
       let val = rawVal;
       if (key === "year") {
-        const num = parseInt(rawVal, 10);
-        val = Number.isNaN(num) ? "" : num;
+        // Ein einzelnes Jahr bleibt eine Zahl wie bisher. Mehrere Jahre mit
+        // `;` („1975;2011") bleiben Text, sonst schnitte parseInt sie ab.
+        const text = String(rawVal ?? "").trim();
+        if (/^\d+$/.test(text)) val = parseInt(text, 10);
+        else val = text;
       }
       const nextTracks = (props.tracks || []).map((t, i) =>
         i === entry.i ? { ...t, [key]: val } : t,

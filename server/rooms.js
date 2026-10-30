@@ -14,6 +14,22 @@ function collectMemberAvatars (room) {
 
 const rooms = new Map()
 
+// Ist ein Slot gerade mit mindestens einem Socket im Raum verbunden? Das weiß
+// nur die Socket-Schicht (server/index.js), sie hängt ihre Prüfung über
+// `setSlotConnectedCheck` ein. Ohne Prüfung gilt jeder Slot als verbunden.
+let slotConnectedCheck = null
+function setSlotConnectedCheck (fn) {
+  slotConnectedCheck = typeof fn === 'function' ? fn : null
+}
+function isSlotConnected (room, slotId) {
+  if (!slotConnectedCheck) return true
+  try {
+    return !!slotConnectedCheck(room, slotId)
+  } catch {
+    return true
+  }
+}
+
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 const VALID_GAME_MODES = ['normal', 'film', 'battle', 'bingo']
 
@@ -134,6 +150,26 @@ function fuzzyMatch (input, expected) {
   return levenshtein(a, b) <= allowed
 }
 
+// Mehrere Einträge pro Feld mit `;` (Titel, Jahr, Film; `|` aus älteren
+// Daten). Gleiche Regeln wie im Client (src/utils/songVariants.js).
+function splitVariants (value) {
+  return String(value ?? '').split(/[;|]/).map((v) => v.trim()).filter(Boolean)
+}
+
+// Alle Jahre der Songdaten, Hauptjahr zuerst. `years` schickt der Host mit,
+// sonst aus `year` (Zahl oder „1975;2011").
+function yearsOfSong (songData) {
+  const list = Array.isArray(songData?.years) && songData.years.length
+    ? songData.years
+    : splitVariants(songData?.year)
+  return list
+    .map((v) => {
+      const m = String(v).match(/(\d{4})/)
+      return m ? Number.parseInt(m[1], 10) : 0
+    })
+    .filter((y) => y > 0)
+}
+
 function matchesTitle (input, expected) {
   // Reihenfolge ist wichtig: ERST die Klammern-Zusaetze, DANN das Featuring.
   // Andersherum schneidet `stripFeaturingFromTitle` bei einem Titel wie
@@ -142,8 +178,9 @@ function matchesTitle (input, expected) {
   // vollstaendiges Klammerpaar mehr, und der halbe Zusatz bleibt stehen -
   // der Titel galt dann nur mit mitgetippter Gaesteliste als richtig.
   const a = stripFeaturingFromTitle(stripVersionDescriptors(input))
-  const b = stripFeaturingFromTitle(stripVersionDescriptors(expected))
-  return fuzzyMatch(a, b)
+  // Jede Titel-Variante (`;`) zählt.
+  return splitVariants(expected).some((t) =>
+    fuzzyMatch(a, stripFeaturingFromTitle(stripVersionDescriptors(t))))
 }
 
 function matchesArtist (input, expected) {
@@ -155,16 +192,27 @@ function matchesArtist (input, expected) {
 
 // Kategorie-Auswahl: pro Runde eine zufällige Kategorie aus dem aktuellen
 // Schwierigkeitspool.
-function pickBingoCategory (difficulty) {
+// Gezogen wird nur aus Kategorien, deren Farbe noch mindestens ein Team
+// markieren kann. Eine Farbe, die bei allen voll ist, fällt aus dem Pool und
+// kommt von selbst zurück, sobald wieder irgendwo ein Feld frei wird (etwa
+// durch ein per Bonus entferntes Kreuz), denn geprüft wird bei jedem Zug neu.
+// Ist keine Farbe mehr frei, bleibt zur Sicherheit die ganze Liste.
+function pickBingoCategory (difficulty, room) {
   const list = BINGO_CATEGORIES[difficulty] || BINGO_CATEGORIES.easy
-  return list[Math.floor(Math.random() * list.length)]
+  const offen = room?.bingoState
+    ? list.filter((cat) => room.players.some((p) => hasFreeCellOfColor(room, p.slotId, cat.color)))
+    : list
+  const pool = offen.length ? offen : list
+  return pool[Math.floor(Math.random() * pool.length)]
 }
 
 // Bewertung der Team-Antwort. `classification` ist die serverseitig
 // gespeicherte Solo/Gruppe-Klassifikation (nur relevant für solo-group).
 // Rückgabe: { correct, exactYear } – `exactYear` löst die Bonus-Regel aus.
+// Mehrere Jahre: jede Variante zählt (bei ±X das nächstgelegene).
 function evaluateBingoAnswer (category, songData, answer, classification) {
-  const year = Number(songData?.year || 0)
+  const years = yearsOfSong(songData)
+  const year = years[0] || 0
   const result = { correct: false, exactYear: false }
   if (!category || !songData) return result
 
@@ -180,8 +228,7 @@ function evaluateBingoAnswer (category, songData, answer, classification) {
       const val = String(answer || '').toLowerCase()
       if (val !== 'before' && val !== 'after') return result
       // 2000 zählt zu „ab 2000"
-      const expected = year < 2000 ? 'before' : 'after'
-      result.correct = val === expected
+      result.correct = years.some((y) => (y < 2000 ? 'before' : 'after') === val)
       return result
     }
     case 'title': {
@@ -195,15 +242,14 @@ function evaluateBingoAnswer (category, songData, answer, classification) {
     case 'exact-year': {
       const guess = Number(answer)
       if (!Number.isFinite(guess)) return result
-      result.correct = guess === year
+      result.correct = years.includes(guess)
       result.exactYear = result.correct
       return result
     }
     case 'decade': {
       const guess = Number(answer)
       if (!Number.isFinite(guess)) return result
-      const decade = Math.floor(year / 10) * 10
-      result.correct = guess === decade
+      result.correct = years.some((y) => Math.floor(y / 10) * 10 === guess)
       return result
     }
     case 'year-2':
@@ -212,7 +258,7 @@ function evaluateBingoAnswer (category, songData, answer, classification) {
       const range = category.bonusYearRange || 0
       const guess = Number(answer)
       if (!Number.isFinite(guess) || !year) return result
-      const diff = Math.abs(guess - year)
+      const diff = Math.min(...years.map((y) => Math.abs(guess - y)))
       result.correct = diff <= range
       result.exactYear = diff === 0
       return result
@@ -324,6 +370,7 @@ function makeIdleRound () {
     songLink: null,
     songData: null, // wird erst nach Antwortphase enthüllt
     teamAnswers: {}, // slotId -> string
+    teamConfirmed: {}, // slotId -> true, sobald das Team abgegeben hat
     answersRevealed: false,
     deadlineTimestamp: null,
     correctSlots: [], // slotIds mit korrekter Antwort (dürfen markieren)
@@ -367,10 +414,17 @@ function ensureAllTeamsHaveCards (room) {
  * Antwortphase verteilt.
  */
 function startBingoRound (room, { songLink, songData }) {
-  if (!room?.bingoState) return { ok: false, reason: 'Kein Bingo-Raum' }
-  if (room.bingoState.winners) return { ok: false, reason: 'Spiel bereits beendet' }
+  if (!room?.bingoState) return { ok: false, reason: 'In diesem Raum läuft kein Bingo.' }
+  if (room.bingoState.winners) return { ok: false, reason: 'Das Spiel ist schon vorbei.' }
+  // Nur aus einer ruhenden Runde starten. Ein zweiter Klick auf „Runde
+  // starten" würde sonst die laufende Runde samt Kategorie und Songdaten
+  // überschreiben. `busy` markiert diesen harmlosen Fall für den Handler.
+  const phase = room.bingoState.round?.phase || 'idle'
+  if (phase !== 'idle' && phase !== 'round-done') {
+    return { ok: false, busy: true, reason: 'Die Runde läuft bereits.' }
+  }
   const difficulty = room.settings?.bingoDifficulty || 'easy'
-  const category = pickBingoCategory(difficulty)
+  const category = pickBingoCategory(difficulty, room)
   const prevRoundNumber = Number(room.bingoState.round?.roundNumber || 0)
   room.bingoState.round = {
     ...makeIdleRound(),
@@ -390,7 +444,7 @@ function startBingoRound (room, { songLink, songData }) {
 function openBingoAnswering (room) {
   if (!room?.bingoState?.round) return { ok: false }
   const r = room.bingoState.round
-  if (r.phase !== 'reveal') return { ok: false, reason: 'Falsche Phase' }
+  if (r.phase !== 'reveal') return { ok: false, reason: 'Die Antwortrunde ist schon offen oder vorbei.' }
   const timerMode = room.settings?.bingoTimerMode || 'timer'
   const timerSeconds = Number(room.settings?.bingoTimerSeconds) || BINGO_TIMER_SECONDS_DEFAULT
   r.phase = 'answering'
@@ -404,24 +458,57 @@ function openBingoAnswering (room) {
  * gespiegelt.
  */
 function setBingoTeamAnswer (room, username, value) {
-  if (!room?.bingoState?.round) return { ok: false, reason: 'Keine Runde' }
+  if (!room?.bingoState?.round) return { ok: false, reason: 'Gerade läuft keine Runde.' }
   const r = room.bingoState.round
-  if (r.phase !== 'answering') return { ok: false, reason: 'Antwortphase geschlossen' }
+  if (r.phase !== 'answering') return { ok: false, reason: 'Die Antwortzeit ist schon vorbei.' }
   const slot = room.players.find((p) => p.members.includes(username))
-  if (!slot) return { ok: false, reason: 'Kein Team' }
-  r.teamAnswers[slot.slotId] = String(value ?? '').slice(0, 120)
+  if (!slot) return { ok: false, reason: 'Du spielst in dieser Runde in keinem Team mit.' }
+  const neu = String(value ?? '').slice(0, 120)
+  // Geänderte Antwort nach der Abgabe: Team gilt wieder als offen. Gleicher
+  // Wert (verspäteter Live-Sync eines Mitspielers) lässt die Abgabe stehen.
+  if (r.teamAnswers[slot.slotId] !== neu) delete r.teamConfirmed[slot.slotId]
+  r.teamAnswers[slot.slotId] = neu
   return { ok: true, slotId: slot.slotId }
+}
+
+/**
+ * Team gibt seine Antwort ab (`confirmed`) oder nimmt die Abgabe zurück, um
+ * sie zu ändern. Die Antwort kommt beim Abgeben mit, damit ein noch nicht
+ * gesendeter Live-Sync (Debounce) nicht verloren geht.
+ */
+function confirmBingoTeamAnswer (room, username, confirmed, value) {
+  if (!room?.bingoState?.round) return { ok: false, reason: 'Gerade läuft keine Runde.' }
+  const r = room.bingoState.round
+  if (r.phase !== 'answering') return { ok: false, reason: 'Die Antwortzeit ist schon vorbei.' }
+  const slot = room.players.find((p) => p.members.includes(username))
+  if (!slot) return { ok: false, reason: 'Du spielst in dieser Runde in keinem Team mit.' }
+  if (!r.teamConfirmed) r.teamConfirmed = {}
+  if (!confirmed) {
+    delete r.teamConfirmed[slot.slotId]
+    return { ok: true }
+  }
+  const antwort = value !== undefined && value !== null
+    ? String(value).slice(0, 120)
+    : String(r.teamAnswers[slot.slotId] ?? '')
+  if (antwort.trim() === '') {
+    return { ok: false, reason: 'Gib zuerst eine Antwort ein.' }
+  }
+  r.teamAnswers[slot.slotId] = antwort
+  r.teamConfirmed[slot.slotId] = true
+  return { ok: true }
 }
 
 /**
  * Prüft ob alle Teams eine (nicht-leere) Antwort abgegeben haben.
  */
+// Fertig ist ein Team erst mit abgegebener Antwort, ein bloß ausgefülltes
+// Feld zählt nicht (bis 1.0.7 zählte jedes nicht leere Feld als fertig).
 function allBingoTeamsAnswered (room) {
   if (!room?.bingoState?.round) return false
-  const answers = room.bingoState.round.teamAnswers
+  const { teamAnswers, teamConfirmed = {} } = room.bingoState.round
   return room.players.every((p) => {
-    const v = answers[p.slotId]
-    return v !== undefined && String(v).trim() !== ''
+    const v = teamAnswers[p.slotId]
+    return teamConfirmed[p.slotId] && v !== undefined && String(v).trim() !== ''
   })
 }
 
@@ -443,20 +530,17 @@ function ensembleToClassification (ensemble) {
 function resolveBingoRound (room) {
   if (!room?.bingoState?.round) return { ok: false }
   const r = room.bingoState.round
-  if (r.phase !== 'answering') return { ok: false, reason: 'Nicht in Antwortphase' }
+  if (r.phase !== 'answering') return { ok: false, reason: 'Die Runde ist schon aufgelöst.' }
 
-  // Solo/Gruppe: Reihenfolge (1) gespeicherte Klassifikation, (2) Band/Solo aus
-  // den Metadaten (ensemble), sonst auf den Host warten.
+  // Solo/Gruppe: Reihenfolge (1) Band/Solo aus den Metadaten der Karte
+  // (ensemble), (2) gespeicherte Klassifikation, sonst auf den Host warten.
+  // Die Metadaten gehen vor, weil sie pro Version gepflegt und korrigiert
+  // werden. Eine einmal gespeicherte Klassifikation würde eine spätere
+  // Korrektur sonst für immer überdecken. Aus demselben Grund wird nur die
+  // Entscheidung des Hosts gespeichert, nie ein aus den Metadaten gelesener Wert.
   if (r.category?.id === 'solo-group') {
-    let cls = songClassifications.getClassification(r.songLink)
-    if (!cls) {
-      cls = ensembleToClassification(r.songData?.ensemble)
-      // Aus den Metadaten gewonnene Klassifikation persistieren, damit sie auch
-      // ohne Metadaten (z. B. Gastspiel) künftig sofort greift.
-      if (cls) {
-        try { songClassifications.setClassification(r.songLink, cls) } catch { /* best effort */ }
-      }
-    }
+    const cls = ensembleToClassification(r.songData?.ensemble) ||
+      songClassifications.getClassification(r.songLink)
     if (!cls) {
       r.phase = 'awaiting-solo-group'
       r.deadlineTimestamp = null
@@ -495,10 +579,19 @@ function finalizeBingoAnswerEvaluation (room, soloGroupClassification) {
   r.phase = correctSlots.length > 0 ? 'marking' : 'bonus-check'
   r.markedThisRound = {}
   r.bonusResolved = {}
-  // Wenn niemand korrekt geraten hat, gibt es nichts zu markieren –
-  // Bonus-Phase wird direkt geprüft (führt zu round-done, weil dann auch
-  // niemand einen Bonus hat).
-  if (r.phase === 'bonus-check') maybeAdvanceBingoPhaseAfterBonus(room)
+  // Teams ohne freies Feld der Kategorie-Farbe können nichts markieren. Sie
+  // gelten gleich als erledigt, sonst wartet die Runde ewig auf ihr Kreuz.
+  for (const sid of correctSlots) {
+    if (!hasFreeCellOfColor(room, sid, r.category?.color)) r.markedThisRound[sid] = true
+  }
+  if (r.phase === 'marking') {
+    maybeAdvanceBingoPhaseAfterMarking(room)
+  } else {
+    // Wenn niemand korrekt geraten hat, gibt es nichts zu markieren –
+    // Bonus-Phase wird direkt geprüft (führt zu round-done, weil dann auch
+    // niemand einen Bonus hat).
+    maybeAdvanceBingoPhaseAfterBonus(room)
+  }
   return { ok: true, correctSlots, bonusPending, perTeam }
 }
 
@@ -509,9 +602,9 @@ function finalizeBingoAnswerEvaluation (room, soloGroupClassification) {
 function classifyBingoSoloGroup (room, classification) {
   if (!room?.bingoState?.round) return { ok: false }
   const r = room.bingoState.round
-  if (r.phase !== 'awaiting-solo-group') return { ok: false, reason: 'Falsche Phase' }
+  if (r.phase !== 'awaiting-solo-group') return { ok: false, reason: 'Gerade ist keine Einordnung nötig.' }
   if (classification !== 'solo' && classification !== 'group') {
-    return { ok: false, reason: 'Ungültige Klassifikation' }
+    return { ok: false, reason: 'Bitte wähle Solo oder Gruppe.' }
   }
   songClassifications.setClassification(r.songLink, classification)
   return finalizeBingoAnswerEvaluation(room, classification)
@@ -522,21 +615,21 @@ function classifyBingoSoloGroup (room, classification) {
  * in `correctSlots` und nur einmal pro Runde.
  */
 function markBingoCell (room, username, cellIndex) {
-  if (!room?.bingoState?.round) return { ok: false, reason: 'Keine Runde' }
+  if (!room?.bingoState?.round) return { ok: false, reason: 'Gerade läuft keine Runde.' }
   const r = room.bingoState.round
-  if (r.phase !== 'marking') return { ok: false, reason: 'Nicht in Markier-Phase' }
+  if (r.phase !== 'marking') return { ok: false, reason: 'Gerade darf niemand ein Feld ankreuzen.' }
   const slot = room.players.find((p) => p.members.includes(username))
-  if (!slot) return { ok: false, reason: 'Kein Team' }
-  if (!r.correctSlots.includes(slot.slotId)) return { ok: false, reason: 'Team hat nicht korrekt geraten' }
-  if (r.markedThisRound[slot.slotId]) return { ok: false, reason: 'Bereits markiert' }
+  if (!slot) return { ok: false, reason: 'Du spielst in dieser Runde in keinem Team mit.' }
+  if (!r.correctSlots.includes(slot.slotId)) return { ok: false, reason: 'Ankreuzen dürfen nur Teams, die richtig lagen.' }
+  if (r.markedThisRound[slot.slotId]) return { ok: false, reason: 'Ihr habt in dieser Runde schon angekreuzt.' }
   const idx = Number(cellIndex)
   if (!Number.isInteger(idx) || idx < 0 || idx >= BINGO_CELL_COUNT) {
-    return { ok: false, reason: 'Ungültiges Feld' }
+    return { ok: false, reason: 'Dieses Feld gibt es nicht.' }
   }
   const cells = room.bingoState.teamCards[slot.slotId] || []
   const marks = room.bingoState.teamMarks[slot.slotId] || []
-  if (cells[idx] !== r.category.color) return { ok: false, reason: 'Falsche Farbe' }
-  if (marks[idx]) return { ok: false, reason: 'Feld bereits markiert' }
+  if (cells[idx] !== r.category.color) return { ok: false, reason: 'Das Feld hat nicht die Farbe dieser Runde.' }
+  if (marks[idx]) return { ok: false, reason: 'Das Feld ist schon angekreuzt.' }
   marks[idx] = true
   r.markedThisRound[slot.slotId] = true
   room.bingoState.bingoCounts[slot.slotId] = countCompletedLines(marks)
@@ -544,17 +637,49 @@ function markBingoCell (room, username, cellIndex) {
   return { ok: true }
 }
 
+// Teams ohne verbundenes Mitglied kann niemand ankreuzen lassen. Auf sie wird
+// nicht gewartet, sonst hängt die Runde, bis sie zurückkommen.
 function maybeAdvanceBingoPhaseAfterMarking (room) {
   const r = room.bingoState.round
-  const allMarked = r.correctSlots.every((sid) => r.markedThisRound[sid])
+  const allMarked = r.correctSlots.every((sid) => r.markedThisRound[sid] || !isSlotConnected(room, sid))
   if (!allMarked) return
   r.phase = 'bonus-check'
   maybeAdvanceBingoPhaseAfterBonus(room)
 }
 
+// Hat das Team noch ein freies (unmarkiertes) Feld in `color`?
+function hasFreeCellOfColor (room, slotId, color) {
+  const cells = room.bingoState.teamCards[slotId] || []
+  const marks = room.bingoState.teamMarks[slotId] || []
+  return cells.some((c, idx) => c === color && !marks[idx])
+}
+
+// Hat irgendein Gegner von `slotId` ein Kreuz, das der Bonus entfernen darf
+// (gesetzt und nicht Teil einer vollen 5er-Reihe)?
+function hasRemovableOpponentMark (room, slotId) {
+  return room.players.some((p) => {
+    if (p.slotId === slotId) return false
+    const marks = room.bingoState.teamMarks[p.slotId] || []
+    const locked = getLockedMarkIndices(marks)
+    return marks.some((m, idx) => m && !locked.has(idx))
+  })
+}
+
+// Aufgerufen beim Eintritt in die Bonus-Prüfung UND nach jedem eingesetzten
+// oder übersprungenen Bonus, deshalb sind 'bonus-check' und 'bonus' erlaubt.
+// Bis 1.0.6 ließ die Prüfung nur 'bonus-check' durch: Nach dem Einsetzen
+// steht die Phase aber schon auf 'bonus', die Runde ging nie weiter.
 function maybeAdvanceBingoPhaseAfterBonus (room) {
   const r = room.bingoState.round
-  if (r.phase !== 'bonus-check') return
+  if (r.phase !== 'bonus-check' && r.phase !== 'bonus') return
+  // Ohne entfernbares Kreuz beim Gegner gibt es nichts zu wählen: Bonus
+  // verfällt, statt die Runde mit einem leeren Dialog aufzuhalten.
+  // Dasselbe gilt für ein Team, das gerade niemand bedienen kann.
+  for (const sid of r.bonusPending) {
+    if (!r.bonusResolved[sid] && (!hasRemovableOpponentMark(room, sid) || !isSlotConnected(room, sid))) {
+      r.bonusResolved[sid] = true
+    }
+  }
   const stillPending = r.bonusPending.some((sid) => !r.bonusResolved[sid])
   if (stillPending) {
     r.phase = 'bonus'
@@ -572,11 +697,11 @@ function maybeAdvanceBingoPhaseAfterBonus (room) {
 function useBingoBonus (room, username, targetSlotId, cellIndex) {
   if (!room?.bingoState?.round) return { ok: false }
   const r = room.bingoState.round
-  if (r.phase !== 'bonus') return { ok: false, reason: 'Nicht in Bonus-Phase' }
+  if (r.phase !== 'bonus') return { ok: false, reason: 'Gerade gibt es keinen Bonus.' }
   const slot = room.players.find((p) => p.members.includes(username))
-  if (!slot) return { ok: false, reason: 'Kein Team' }
-  if (!r.bonusPending.includes(slot.slotId)) return { ok: false, reason: 'Kein Bonus für dieses Team' }
-  if (r.bonusResolved[slot.slotId]) return { ok: false, reason: 'Bonus bereits eingesetzt' }
+  if (!slot) return { ok: false, reason: 'Du spielst in dieser Runde in keinem Team mit.' }
+  if (!r.bonusPending.includes(slot.slotId)) return { ok: false, reason: 'Euer Team hat in dieser Runde keinen Bonus.' }
+  if (r.bonusResolved[slot.slotId]) return { ok: false, reason: 'Ihr habt euren Bonus schon eingesetzt.' }
 
   // Skip
   if (targetSlotId === null || targetSlotId === undefined || cellIndex === null || cellIndex === undefined) {
@@ -586,16 +711,16 @@ function useBingoBonus (room, username, targetSlotId, cellIndex) {
   }
 
   const target = room.players.find((p) => p.slotId === targetSlotId)
-  if (!target) return { ok: false, reason: 'Zielteam nicht gefunden' }
-  if (target.slotId === slot.slotId) return { ok: false, reason: 'Kein Bonus auf eigenes Team' }
+  if (!target) return { ok: false, reason: 'Dieses Team gibt es nicht mehr.' }
+  if (target.slotId === slot.slotId) return { ok: false, reason: 'Den Bonus könnt ihr nicht beim eigenen Team einsetzen.' }
   const marks = room.bingoState.teamMarks[target.slotId] || []
   const idx = Number(cellIndex)
   if (!Number.isInteger(idx) || idx < 0 || idx >= BINGO_CELL_COUNT) {
-    return { ok: false, reason: 'Ungültiges Feld' }
+    return { ok: false, reason: 'Dieses Feld gibt es nicht.' }
   }
-  if (!marks[idx]) return { ok: false, reason: 'Feld ist nicht markiert' }
+  if (!marks[idx]) return { ok: false, reason: 'Auf diesem Feld ist kein Kreuz.' }
   const locked = getLockedMarkIndices(marks)
-  if (locked.has(idx)) return { ok: false, reason: 'Feld ist Teil einer abgeschlossenen Reihe' }
+  if (locked.has(idx)) return { ok: false, reason: 'Das Kreuz gehört zu einer fertigen Reihe und bleibt stehen.' }
   marks[idx] = false
   room.bingoState.bingoCounts[target.slotId] = countCompletedLines(marks)
   r.bonusResolved[slot.slotId] = true
@@ -603,13 +728,20 @@ function useBingoBonus (room, username, targetSlotId, cellIndex) {
   return { ok: true }
 }
 
+// Siegziel des Raums (Anzahl voller 5er-Reihen).
+function getBingosToWin (room) {
+  return Number(room.settings?.bingosToWin) || BINGOS_TO_WIN_DEFAULT
+}
+
 /**
  * Prüft nach jeder Runde, ob ein oder mehrere Teams das Bingo-Ziel
  * erreicht haben. Bei mehreren zeitgleich → geteilter Sieg.
+ * Mit `onlyOnWin` (Host-Korrektur mitten in einer Runde) bleibt die Phase
+ * ohne Sieger unverändert, statt die Runde als abgeschlossen zu markieren.
  */
-function checkBingoVictory (room) {
+function checkBingoVictory (room, { onlyOnWin = false } = {}) {
   if (!room?.bingoState) return
-  const target = Number(room.settings?.bingosToWin) || BINGOS_TO_WIN_DEFAULT
+  const target = getBingosToWin(room)
   const winners = []
   for (const slot of room.players) {
     const marks = room.bingoState.teamMarks[slot.slotId] || []
@@ -623,18 +755,38 @@ function checkBingoVictory (room) {
     return { winners }
   }
   // Keine Sieger → Runde abschließen, auf nächste warten.
-  room.bingoState.round.phase = 'round-done'
+  if (!onlyOnWin) room.bingoState.round.phase = 'round-done'
   return { winners: [] }
 }
 
 /**
  * Host beendet die Runde ohne Auflösung (Skip). Setzt zurück ohne Marks
- * zu ändern.
+ * zu ändern. Vorher läuft die Sieg-Prüfung wie bei einer regulären
+ * Auflösung: Hat ein Team in dieser Runde schon sein letztes Kreuz gesetzt
+ * (etwa vor dem Überspringen des Bonus), gewinnt es, statt dass der Sieg mit
+ * dem Überspringen verloren geht.
  */
 function skipBingoRound (room) {
-  if (!room?.bingoState) return
-  if (room.bingoState.winners) return
+  if (!room?.bingoState) return { ok: false }
+  if (room.bingoState.winners) return { ok: true, winners: room.bingoState.winners }
+  const victory = checkBingoVictory(room, { onlyOnWin: true })
+  if (victory?.winners?.length) return { ok: true, winners: victory.winners }
   resetBingoRound(room)
+  return { ok: true, winners: [] }
+}
+
+/**
+ * Nach einem Verbindungsverlust: Wartet die Runde nur noch auf Teams, die
+ * gerade niemand bedienen kann (Ankreuzen oder Bonus), geht sie weiter.
+ * Liefert true, wenn sich die Phase geändert hat.
+ */
+function advanceStalledBingoRound (room) {
+  const r = room?.bingoState?.round
+  if (!r || room.bingoState.winners) return false
+  const vorher = r.phase
+  if (r.phase === 'marking') maybeAdvanceBingoPhaseAfterMarking(room)
+  else if (r.phase === 'bonus') maybeAdvanceBingoPhaseAfterBonus(room)
+  return r.phase !== vorher
 }
 
 /**
@@ -660,26 +812,58 @@ function resetBingoMarks (room) {
   }
   room.bingoState.winners = null
   room.bingoState.round = makeIdleRound()
+  // Das Spiel ist wieder offen. Ohne Reset würde `host:recordGameResult` das
+  // Ergebnis des korrigierten Spiels als Doppelbuchung verwerfen.
+  room.resultRecorded = false
   return { ok: true }
 }
 
 /**
  * Host-Korrektur: ein einzelnes Kreuz eines Teams setzen bzw. entfernen –
  * phasenunabhängig, ohne Farb-/Reihenfolge-Prüfung (Werkzeug für Fehlklicks).
- * Der Bingo-Zähler des Teams wird neu berechnet.
+ * Der Bingo-Zähler des Teams wird neu berechnet. Erreicht ein Team durch ein
+ * gesetztes Kreuz das Siegziel, endet das Spiel sofort wie bei einem
+ * regulären Sieg. Entfernen löst nie einen Sieg aus, kann aber einen falschen
+ * Sieg zurücknehmen: Die Sieger werden dann neu bestimmt, und ohne Sieger ist
+ * die Runde abgeschlossen (`round-done`), das Spiel läuft weiter
+ * (`winnersCleared`).
  */
 function hostSetBingoCell (room, slotId, cellIndex, marked) {
   if (!room?.bingoState) return { ok: false }
   const slot = room.players.find((p) => p.slotId === Number(slotId))
-  if (!slot) return { ok: false, reason: 'Team nicht gefunden' }
+  if (!slot) return { ok: false, reason: 'Dieses Team gibt es nicht mehr.' }
   const idx = Number(cellIndex)
   if (!Number.isInteger(idx) || idx < 0 || idx >= BINGO_CELL_COUNT) {
-    return { ok: false, reason: 'Ungültiges Feld' }
+    return { ok: false, reason: 'Dieses Feld gibt es nicht.' }
   }
   const marks = room.bingoState.teamMarks[slot.slotId]
-  if (!Array.isArray(marks)) return { ok: false, reason: 'Kein Feld' }
+  if (!Array.isArray(marks)) return { ok: false, reason: 'Dieses Team hat noch keine Karte.' }
   marks[idx] = !!marked
-  room.bingoState.bingoCounts[slot.slotId] = countCompletedLines(marks)
+  const count = countCompletedLines(marks)
+  room.bingoState.bingoCounts[slot.slotId] = count
+  // Sieg-Check nur beim Setzen, nur wenn das korrigierte Team damit am Ziel
+  // ist, und nur, solange das Spiel noch läuft (kein zweites Spielende).
+  // Andere Teams am Ziel teilen sich den Sieg wie bei der regulären Prüfung.
+  if (marked && !room.bingoState.winners && count >= getBingosToWin(room)) {
+    const victory = checkBingoVictory(room, { onlyOnWin: true })
+    if (victory?.winners?.length) return { ok: true, winners: victory.winners }
+  }
+  if (!marked && room.bingoState.winners) {
+    const target = getBingosToWin(room)
+    const winners = room.players
+      .filter((p) => countCompletedLines(room.bingoState.teamMarks[p.slotId]) >= target)
+      .map((p) => p.slotId)
+    if (winners.length > 0) {
+      room.bingoState.winners = winners
+      return { ok: true, winners }
+    }
+    room.bingoState.winners = null
+    room.bingoState.round.phase = 'round-done'
+    // Wie beim Zurücksetzen aller Kreuze: Das echte Ergebnis soll später noch
+    // verbucht werden können.
+    room.resultRecorded = false
+    return { ok: true, winnersCleared: true }
+  }
   return { ok: true }
 }
 
@@ -688,7 +872,7 @@ function hostSetBingoCell (room, slotId, cellIndex, marked) {
  */
 function setBingoTimerMode (room, timerMode) {
   if (!room?.settings) return { ok: false }
-  if (!VALID_BINGO_TIMER_MODES.includes(timerMode)) return { ok: false, reason: 'Ungültig' }
+  if (!VALID_BINGO_TIMER_MODES.includes(timerMode)) return { ok: false, reason: 'Diesen Zeitmodus gibt es nicht.' }
   room.settings.bingoTimerMode = timerMode
   // Läuft gerade eine Antwortphase → Deadline anpassen
   const r = room.bingoState?.round
@@ -803,21 +987,21 @@ function addPlayerToSlot (code, username, slotId, slotName) {
  */
 function setSlotPool (code, username, pool) {
   const room = rooms.get(code)
-  if (!room) return { ok: false, reason: 'Raum nicht gefunden' }
+  if (!room) return { ok: false, reason: 'Den Raum gibt es nicht mehr.' }
   const slot = room.players.find(p => p.members.includes(username))
-  if (!slot) return { ok: false, reason: 'Du bist in keinem Slot dieses Raums' }
+  if (!slot) return { ok: false, reason: 'Du hast in diesem Raum noch keinen Platz.' }
   if (typeof pool !== 'string' || !pool.trim()) {
-    return { ok: false, reason: 'Ungültige Version' }
+    return { ok: false, reason: 'Diese Version gibt es nicht.' }
   }
   const normalizedPool = pool.trim()
   if (normalizedPool.length > 100) {
-    return { ok: false, reason: 'Ungültige Version' }
+    return { ok: false, reason: 'Diese Version gibt es nicht.' }
   }
   const isBattle = room.settings?.gameMode === 'battle'
   if (isBattle) {
     const duplicate = room.players.some(p => p.slotId !== slot.slotId && p.pool === normalizedPool)
     if (duplicate) {
-      return { ok: false, reason: 'Diese Version wurde bereits von einem anderen Spieler gewählt' }
+      return { ok: false, reason: 'Diese Version hat schon jemand anderes gewählt.' }
     }
   }
   slot.pool = normalizedPool
@@ -826,9 +1010,11 @@ function setSlotPool (code, username, pool) {
 
 /**
  * Spieler aus Raum entfernen.
- * Leere Slots werden gelöscht. Leerer Raum wird gelöscht.
+ * Leere Slots werden gelöscht. Leerer Raum wird gelöscht, außer mit
+ * `keepRoom`: Beim Slotwechsel ist der Spieler gleich wieder drin, der Raum
+ * darf dazwischen nicht verschwinden.
  */
-function removePlayerFromRoom (code, username) {
+function removePlayerFromRoom (code, username, { keepRoom = false } = {}) {
   const room = rooms.get(code)
   if (!room) return
 
@@ -836,7 +1022,7 @@ function removePlayerFromRoom (code, username) {
     .map(slot => ({ ...slot, members: slot.members.filter(m => m !== username) }))
     .filter(slot => slot.members.length > 0)
 
-  if (room.players.length === 0) {
+  if (room.players.length === 0 && !keepRoom) {
     rooms.delete(code)
   }
 }
@@ -851,6 +1037,8 @@ function getRoomPublicInfo (code) {
     audioMode: room.audioMode,
     gameMode,
     gameStarted: room.gameStarted,
+    // Siegerehrung nach Spielende: Slots sind wie im laufenden Spiel fest.
+    gameOver: !!room.gameOver,
     players: room.players.map(p => ({
       slotId: p.slotId,
       slotName: p.slotName,
@@ -869,29 +1057,105 @@ function getRoomPublicInfo (code) {
   return info
 }
 
+// Bingo: Ist die Lösung der laufenden Runde noch geheim? Gilt im Bingo-Modus,
+// bis die Antworten aufgelöst sind (auch in 'idle', dort schadet es nicht).
+function bingoSolutionHidden (room) {
+  if (room?.settings?.gameMode !== 'bingo') return false
+  return !room.bingoState?.round?.answersRevealed
+}
+
+// Felder einer gezogenen Karte, die im Bingo die Antwort verraten.
+const BINGO_LOESUNGS_FELDER = ['title', 'artist', 'year', 'years', 'movie', 'ensemble']
+
+/**
+ * Spielstand des Hosts (`host:syncState`) für Gäste aufbereiten. Im Bingo
+ * steckt in `currentCard` die gezogene Karte samt Titel, Künstler und Jahr.
+ * Solange die Runde nicht aufgelöst ist, bleiben davon nur die neutralen
+ * Felder (Song-URL, Kartenfarbe) übrig. Die Songdaten kommen nach der
+ * Auflösung über `bingoState.round.songData`.
+ */
+function sanitizeGameStateForGuests (room, gameState) {
+  if (!gameState || typeof gameState !== 'object') return gameState
+  if (!bingoSolutionHidden(room)) return gameState
+  const card = gameState.currentCard
+  if (!card || typeof card !== 'object') return gameState
+  const neutral = { ...card }
+  for (const feld of BINGO_LOESUNGS_FELDER) delete neutral[feld]
+  return { ...gameState, currentCard: neutral }
+}
+
 /**
  * Für Broadcasts (roomState-Event). Analog zu getRoom, aber filtert
- * sensible Bingo-Runden-Daten (`round.songData`) heraus, solange die
- * Antwortphase noch läuft. Verhindert, dass Team-Mitglieder die Antwort
- * per Devtools sehen können, bevor die Auflösung freigegeben wurde.
+ * sensible Bingo-Runden-Daten heraus, solange die Antwortphase noch läuft:
+ * `round.songData`, die Lösungsfelder der Karte im Host-Spielstand und die
+ * Antworten der Teams. Verhindert, dass Team-Mitglieder die Antwort (oder
+ * die Antwort eines anderen Teams) per Devtools sehen können, bevor die
+ * Auflösung freigegeben wurde.
+ *
+ * Die Antworten fehlen in diesem Zustand für alle (`teamAnswers: {}`). Das
+ * eigene Team bekommt seinen Eintrag erst über `roomStateForViewer` zurück,
+ * damit gilt: Ohne bekannten Empfänger wird nichts verraten.
  */
 function getRoomBroadcastState (code) {
   const room = rooms.get(code)
   if (!room) return null
   const clone = { ...room }
-  // Interne Runtime-Objekte aus dem Payload entfernen
+  // Interne Runtime-Objekte aus dem Payload entfernen. Ob gerade auf die
+  // Bereitschaft aller gewartet wird, dürfen die Clients aber wissen (die
+  // URL selbst nicht), damit ein nachträglich verbundener Client den Ablauf
+  // wieder aufnehmen kann.
+  clone.songReadyPending = !!room.pendingSongUrl
   delete clone.pendingSongUrl
   delete clone.songReadySlots
+  // Rückkehr-Verwaltung (wer gegangen ist, wer zurück darf) ist intern.
+  delete clone.leftMembers
+  delete clone.rejoinGrants
   // Profilbilder der Mitglieder mitgeben (username -> avatar|null).
   clone.memberAvatars = collectMemberAvatars(room)
+  if (bingoSolutionHidden(room)) {
+    clone.gameState = sanitizeGameStateForGuests(room, room.gameState)
+  }
   const bs = clone.bingoState
   if (bs && bs.round && !bs.round.answersRevealed) {
     clone.bingoState = {
       ...bs,
-      round: { ...bs.round, songData: null }
+      round: { ...bs.round, songData: null, teamAnswers: {} }
     }
   }
   return clone
+}
+
+// Muss der roomState pro Empfänger zugeschnitten werden? Nur solange Bingo-
+// Antworten noch geheim sind; sonst ist der Payload für alle gleich.
+function roomStateNeedsViewer (code) {
+  const room = rooms.get(code)
+  const round = room?.bingoState?.round
+  if (!round || round.answersRevealed) return false
+  return Object.keys(round.teamAnswers || {}).length > 0
+}
+
+/**
+ * Ergänzt einen mit `getRoomBroadcastState` gebauten Zustand um die Antwort
+ * des eigenen Teams. Empfänger ohne Slot (Zuschauer) behalten `{}`.
+ */
+function roomStateForViewer (state, code, username) {
+  const room = rooms.get(code)
+  const round = room?.bingoState?.round
+  if (!state || !round || round.answersRevealed) return state
+  const slot = room.players.find((p) => (p.members || []).includes(username))
+  if (!slot || !Object.prototype.hasOwnProperty.call(round.teamAnswers || {}, slot.slotId)) {
+    return state
+  }
+  return {
+    ...state,
+    bingoState: {
+      ...state.bingoState,
+      round: {
+        ...state.bingoState.round,
+        teamAnswers: { [slot.slotId]: round.teamAnswers[slot.slotId] }
+      }
+    }
+  }
 }
 
 module.exports = {
@@ -903,12 +1167,16 @@ module.exports = {
   setSlotPool,
   getRoomPublicInfo,
   getRoomBroadcastState,
+  roomStateNeedsViewer,
+  roomStateForViewer,
+  sanitizeGameStateForGuests,
   initBingoState,
   ensureAllTeamsHaveCards,
   // Bingo-Runden-API
   startBingoRound,
   openBingoAnswering,
   setBingoTeamAnswer,
+  confirmBingoTeamAnswer,
   allBingoTeamsAnswered,
   resolveBingoRound,
   classifyBingoSoloGroup,
@@ -918,6 +1186,8 @@ module.exports = {
   nextBingoRound,
   resetBingoMarks,
   hostSetBingoCell,
+  advanceStalledBingoRound,
+  setSlotConnectedCheck,
   setBingoTimerMode,
   checkBingoVictory,
   countCompletedLines,

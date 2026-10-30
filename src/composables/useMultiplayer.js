@@ -1,5 +1,4 @@
 import { watch, nextTick } from "vue";
-import { openSongTab } from "../utils/songTabManager";
 import { Notify, copyToClipboard } from "quasar";
 import {
   connect,
@@ -9,6 +8,7 @@ import {
 } from "../utils/socketService";
 import { getUsername } from "../utils/authService";
 import { storeSlotAvatars } from "../utils/profileService";
+import { encodeNamesQuery, decodeNamesQuery } from "./useGameState";
 
 /**
  * Composable für Multiplayer-Logik: Synchronisation, Gast-Aktionen,
@@ -23,6 +23,8 @@ import { storeSlotAvatars } from "../utils/profileService";
  * @param {Function} opts.beginObjection - aus useGuessEngine
  * @param {Function} opts.toggleObjectionOptIn - aus useGuessEngine
  * @param {Function} opts.cancelGuessAndReplace - aus useGuessEngine
+ * @param {Function} opts.clearObjectionTimers - aus useGuessEngine
+ * @param {Function} opts.resumeObjectionTimers - aus useGuessEngine
  * @param {object} opts.route - vue-router route
  * @param {object} opts.router - vue-router router
  */
@@ -36,6 +38,8 @@ export function useMultiplayer(
     beginObjection,
     toggleObjectionOptIn,
     cancelGuessAndReplace,
+    clearObjectionTimers,
+    resumeObjectionTimers,
     route,
     router,
   },
@@ -47,6 +51,7 @@ export function useMultiplayer(
     multiplayerIsHost,
     multiplayerRoomCode,
     multiplayerAudioMode,
+    roomVersionsMeta,
     guestSlotIndex,
     showSkipRequestDialog,
     skipRequestFrom,
@@ -90,24 +95,57 @@ export function useMultiplayer(
     guessResults,
     loadingNextSong,
     playedLinksHistory,
+    playedSongs,
+    currentSongLink,
+    turnCounts,
+    playerIndexAfterResolution,
     pendingPlacement,
+    pendingPlacementOriginal,
+    pendingPlacementResult,
+    pendingGuessPoints,
+    pendingGuessObjectionReward,
+    pendingObjectionPlacement,
+    objectionQueue,
+    objectionQueuePos,
     guessedTitle,
     guessedArtist,
     guessedYear,
     guessedMovie,
     gameMode,
     bingoState,
+    bingoSettings,
+    songPlayPromptUrl,
+    // Funktionen
+    openSongHere,
+    openSongOrPrompt,
+    startFeedbackCountdown,
     // Computed
     isMyGuestGuessTurn,
   } = state;
 
   let _syncDebounceTimer = null;
   let _cleanup = null;
+  // Host frisch in der Spielansicht: Bis der erste roomState zeigt, ob der
+  // Raum schon einen Spielstand hat, wird nichts gesendet. Sonst überschriebe
+  // ein neu geladener Host den laufenden Stand mit seinem leeren.
+  let _holdHostSync = false;
+  let _hostSyncHeld = false;
+  // Zeitpunkt der eigenen Skip-Anfrage (Gast). Nur wer gefragt hat, bekommt
+  // die Rückmeldung, dass der Host übersprungen hat.
+  let _skipRequestedAt = 0;
+  // Song, für den dieser Client „bereit“ gedrückt hat. Ging der Klick ohne
+  // Verbindung ins Leere oder hat der Server ihn mit dem alten Socket
+  // verloren, wird er nach dem Wiederverbinden nachgereicht.
+  let _readyWantedUrl = null;
 
   // ── State-Synchronisation (nur Host) ───────────────────────────────
 
   const syncMultiplayerState = () => {
     if (!multiplayerMode.value || !multiplayerIsHost.value) return;
+    if (_holdHostSync) {
+      _hostSyncHeld = true;
+      return;
+    }
     if (_syncDebounceTimer) clearTimeout(_syncDebounceTimer);
     _syncDebounceTimer = setTimeout(() => {
       _syncDebounceTimer = null;
@@ -145,6 +183,26 @@ export function useMultiplayer(
           playedLinksHistoryCount: playedLinksHistory.value.length,
           pendingPlacementPlayerIndex:
             pendingPlacement.value?.playerIndex ?? null,
+          // Felder, die nur der Host braucht. Der Server speichert den
+          // Spielstand als `room.gameState`; ein Nachfolger nach einem
+          // Host-Wechsel übernimmt sie von dort und kann weiterspielen.
+          host: {
+            playedLinksHistory: playedLinksHistory.value,
+            // Im Bingo nicht: der letzte Eintrag (Titel, Künstler, Jahr)
+            // wäre die Lösung der laufenden Runde.
+            playedSongs: gameMode.value === "bingo" ? [] : playedSongs.value,
+            currentSongLink: currentSongLink.value,
+            turnCounts: turnCounts.value,
+            playerIndexAfterResolution: playerIndexAfterResolution.value,
+            pendingPlacement: pendingPlacement.value,
+            pendingPlacementOriginal: pendingPlacementOriginal.value,
+            pendingPlacementResult: pendingPlacementResult.value,
+            pendingGuessPoints: pendingGuessPoints.value,
+            pendingGuessObjectionReward: pendingGuessObjectionReward.value,
+            pendingObjectionPlacement: pendingObjectionPlacement.value,
+            objectionQueue: objectionQueue.value,
+            objectionQueuePos: objectionQueuePos.value,
+          },
         },
       });
     }, 50);
@@ -157,7 +215,7 @@ export function useMultiplayer(
   // ── Gast-Funktionen ────────────────────────────────────────────────
 
   const guestRequestSkip = () => {
-    socketEmit("guest:skipRequest", {});
+    if (socketEmit("guest:skipRequest", {})) _skipRequestedAt = Date.now();
     Notify.create({
       type: "info",
       message: "Skip-Anfrage an Host gesendet...",
@@ -165,9 +223,10 @@ export function useMultiplayer(
     });
   };
 
+  // `host:confirmSkip` an die Gäste schickt manualSkipSong selbst. Ein
+  // zweiter Emit hier hätte die Gäste doppelt zurückgesetzt.
   const confirmGuestSkip = () => {
     showSkipRequestDialog.value = false;
-    socketEmit("host:confirmSkip", {});
     manualSkipSong();
   };
 
@@ -178,7 +237,7 @@ export function useMultiplayer(
 
   const openGuestSongUrl = () => {
     if (guestPendingSongUrl.value) {
-      openSongTab(guestPendingSongUrl.value);
+      openSongHere(guestPendingSongUrl.value);
       guestPendingSongUrl.value = null;
     }
   };
@@ -219,10 +278,22 @@ export function useMultiplayer(
     guestGuessMovie.value = "";
   };
 
+  // Ohne Verbindung bleibt der Knopf aktiv: Ein dauerhaft gesetztes
+  // „bestätigt“ ohne Wirkung beim Server hielte die Runde für alle an. Der
+  // Wunsch wird gemerkt und nach dem Wiederverbinden nachgereicht.
   const confirmSongReady = () => {
     if (songReadyConfirmed.value) return;
-    songReadyConfirmed.value = true;
-    socketEmit("player:songReady", {});
+    _readyWantedUrl = pendingSongUrl.value || null;
+    if (socketEmit("player:songReady", {})) {
+      songReadyConfirmed.value = true;
+      return;
+    }
+    Notify.create({
+      type: "warning",
+      message:
+        "Keine Verbindung zum Server. Deine Bestätigung wird nachgereicht, sobald die Verbindung wieder steht.",
+      timeout: 3500,
+    });
   };
 
   const resetSongReady = () => {
@@ -230,6 +301,7 @@ export function useMultiplayer(
     songReadyCount.value = 0;
     songReadyTotal.value = 0;
     songReadyConfirmed.value = false;
+    _readyWantedUrl = null;
   };
 
   // Gast-seitiger Reset der (gespiegelten) Einwand-UI – für Skip/Neustart, damit
@@ -247,6 +319,34 @@ export function useMultiplayer(
     objectionRaffleWinner.value = null;
     correctObjectorNames.value = [];
     objectionWinnerName.value = "";
+  };
+
+  // Host-Felder aus einem gespeicherten Spielstand übernehmen (Host-Wechsel).
+  // Fehlt ein Feld (älterer Host-Client), bleibt der lokale Wert stehen.
+  const adoptHostFields = (h) => {
+    if (!h || typeof h !== "object") return;
+    if (Array.isArray(h.playedLinksHistory)) {
+      playedLinksHistory.value = [...h.playedLinksHistory];
+    }
+    if (Array.isArray(h.playedSongs) && h.playedSongs.length > 0) {
+      playedSongs.value = [...h.playedSongs];
+    }
+    if ("currentSongLink" in h) currentSongLink.value = h.currentSongLink || null;
+    if (Array.isArray(h.turnCounts)) turnCounts.value = [...h.turnCounts];
+    if ("playerIndexAfterResolution" in h) {
+      playerIndexAfterResolution.value = h.playerIndexAfterResolution ?? null;
+    }
+    pendingPlacement.value = h.pendingPlacement || null;
+    pendingPlacementOriginal.value = h.pendingPlacementOriginal || null;
+    pendingPlacementResult.value = h.pendingPlacementResult || null;
+    pendingGuessPoints.value = Number(h.pendingGuessPoints) || 0;
+    pendingGuessObjectionReward.value =
+      Number(h.pendingGuessObjectionReward) || 0;
+    pendingObjectionPlacement.value = h.pendingObjectionPlacement || null;
+    objectionQueue.value = Array.isArray(h.objectionQueue)
+      ? [...h.objectionQueue]
+      : [];
+    objectionQueuePos.value = Number(h.objectionQueuePos) || 0;
   };
 
   const copyRoomCode = () => {
@@ -276,34 +376,153 @@ export function useMultiplayer(
 
     const socket = connect();
 
+    // Spielerliste aus dem letzten roomState (Reihenfolge wie room.players)
+    // und der zuletzt bekannte Spielstand des Servers. Beides braucht es für
+    // die Absender-Prüfung und für die Übernahme bei einem Host-Wechsel.
+    let lastRoomPlayers = [];
+    let lastGameState = null;
+    // Hat der Server gerade einen Bereit-Ablauf („Alle Geräte“) offen?
+    // null, solange unbekannt (frisch geladen).
+    let serverReadyPending = null;
+    // Nach dem Wiederverbinden die eigene Bereit-Bestätigung nachreichen,
+    // sobald `songReady:state` zeigt, dass der Ablauf für denselben Song
+    // noch offen ist.
+    let resendReadyOnState = false;
+
+    // Startet dieser Client die Spielansicht als Host (isHost=1 in der URL),
+    // prüft der erste roomState, ob der Raum schon einen Spielstand hat.
+    // Bis dahin hält syncMultiplayerState still (siehe `_holdHostSync`).
+    let hostStateChecked = !multiplayerIsHost.value;
+    let holdTimer = null;
+    const releaseHostSync = () => {
+      if (holdTimer) {
+        clearTimeout(holdTimer);
+        holdTimer = null;
+      }
+      if (!_holdHostSync) return;
+      _holdHostSync = false;
+      if (_hostSyncHeld) {
+        _hostSyncHeld = false;
+        syncMultiplayerState();
+      }
+    };
+    if (multiplayerIsHost.value) {
+      _holdHostSync = true;
+      _hostSyncHeld = false;
+      // Kommt kein roomState (Server antwortet nicht), nicht ewig schweigen.
+      holdTimer = setTimeout(() => {
+        hostStateChecked = true;
+        releaseHostSync();
+      }, 5000);
+    }
+
+    // Noch nichts gespielt: keine Karte auf dem Tisch, keine Zeitleiste mit
+    // Karten. Nur dann darf ein Spielstand vom Server den lokalen ersetzen.
+    const hasCards = (timelines) =>
+      (Array.isArray(timelines) ? timelines : []).some((p) =>
+        (p?.cards || []).some((c) => c && !c.placeholder),
+      );
+    const localStateIsFresh = () =>
+      !currentCard.value && !hasCards(playerTimelines.value);
+    const roomStateHasProgress = (gs) =>
+      !!gs &&
+      typeof gs === "object" &&
+      (!!gs.currentCard ||
+        hasCards(gs.playerTimelines) ||
+        Number(gs.playedLinksHistoryCount) > 0);
+
+    // Zeitleisten-Index des Absenders einer Gast-Aktion. `fromSlotIndex`
+    // setzt der Server (Index in room.players). Die Zeitleisten folgen der
+    // Slot-Reihenfolge beim Spielstart; verschiebt sie sich doch (jemand hat
+    // den Raum verlassen), hilft der Slotname. -1 heißt: verwerfen.
+    const senderTimelineIndex = ({ fromSlotIndex, fromUsername } = {}) => {
+      let idx = Number.isInteger(fromSlotIndex) ? fromSlotIndex : -1;
+      // Älterer Server ohne `fromSlotIndex`: über den Nutzernamen suchen.
+      if (fromSlotIndex === undefined && fromUsername) {
+        idx = lastRoomPlayers.findIndex((p) =>
+          (p.members || []).includes(fromUsername),
+        );
+      }
+      if (idx < 0) return -1;
+      const timelines = playerTimelines.value || [];
+      const slotName = lastRoomPlayers[idx]?.slotName;
+      if (slotName && timelines[idx]?.name !== slotName) {
+        const treffer = timelines
+          .map((p, i) => (p?.name === slotName ? i : -1))
+          .filter((i) => i >= 0);
+        if (treffer.length === 1) return treffer[0];
+      }
+      return idx < timelines.length ? idx : -1;
+    };
+
     // roomState: Audio-Modus-Änderungen vom Host empfangen
     const onRoomState = (room) => {
       multiplayerAudioMode.value = room.audioMode;
+      // Namen eigener/freigegebener Versionen für die Versionsanzeige.
+      if (room?.settings?.customVersionsMeta) {
+        roomVersionsMeta.value = room.settings.customVersionsMeta;
+      }
       // Slot-Avatare bei jedem roomState mitziehen: der Server sendet
       // `memberAvatars` in getRoomBroadcastState. Damit werden Profilbilder
       // auch nach Rejoin/späterem Beitritt in der Spielansicht korrekt
       // aktualisiert (ohne auf ein `gameStarted`-Event angewiesen zu sein).
       if (room && Array.isArray(room.players)) {
         storeSlotAvatars(room.players, room.memberAvatars || {});
+        lastRoomPlayers = room.players;
       }
-      // Host-Failover erkennen: Wenn der Host-Name im Raum jetzt mit dem
-      // eigenen Nutzernamen übereinstimmt, sind wir der neue Host. UI
-      // schaltet automatisch auf Host-Ansicht (Skip-Button, Draw-Button,
-      // Bingo-Aktionen). Umgekehrt: wenn wir vorher Host waren aber der
-      // Server jemand anderen zeigt, degradieren wir.
+      if (room?.gameState && typeof room.gameState === "object") {
+        lastGameState = room.gameState;
+      }
       const me = getUsername() || "";
+      // Erster roomState nach dem Start als Host: Läuft im Raum schon ein
+      // Spiel (Host hat neu geladen, kommt aus der Lobby zurück oder ist
+      // ohne verbundenen Host eingesprungen), übernehmen wir dessen Stand
+      // auf demselben Weg wie beim Host-Wechsel, statt leer anzufangen und
+      // den Stand aller zu überschreiben.
+      if (!hostStateChecked && room?.code) {
+        hostStateChecked = true;
+        if (
+          multiplayerIsHost.value &&
+          room.hostUsername === me &&
+          localStateIsFresh() &&
+          roomStateHasProgress(room.gameState)
+        ) {
+          if (holdTimer) {
+            clearTimeout(holdTimer);
+            holdTimer = null;
+          }
+          _holdHostSync = false;
+          _hostSyncHeld = false;
+          becomeHost(room.gameState, "Laufendes Spiel übernommen.");
+        } else {
+          releaseHostSync();
+        }
+      }
+      // Bereit-Ablauf: Ist keiner offen, darf beim Gast auch kein „Song
+      // öffnen“ mehr hängen (etwa nach einem Neuladen, als der Song schon
+      // per `song:openNow` lief). Beim Host nicht: er setzt pendingSongUrl
+      // schon vor `host:cardDrawn`, ein älterer roomState würde es löschen.
+      if (typeof room?.songReadyPending === "boolean") {
+        serverReadyPending = room.songReadyPending;
+        if (
+          !room.songReadyPending &&
+          !multiplayerIsHost.value &&
+          pendingSongUrl.value
+        ) {
+          resetSongReady();
+        }
+      }
+      // Host-Failover erkennen: Der URL-Parameter `isHost` ist nur der
+      // Startwert, maßgeblich ist der Host-Name im Raum. Stimmt er mit dem
+      // eigenen Nutzernamen überein, sind wir (neuer) Host und übernehmen
+      // den Spielstand. Umgekehrt (etwa ein neu geladener Ex-Host) werden
+      // wir Gast und holen uns den Stand vom Server.
       if (room?.hostUsername && me) {
         const shouldBeHost = room.hostUsername === me;
         if (shouldBeHost && !multiplayerIsHost.value) {
-          multiplayerIsHost.value = true;
-          Notify.create({
-            type: "info",
-            message: "Du bist jetzt Host.",
-            timeout: 2500,
-            position: "top",
-          });
+          becomeHost(lastGameState);
         } else if (!shouldBeHost && multiplayerIsHost.value) {
-          multiplayerIsHost.value = false;
+          becomeGuest();
         }
       }
       // Bingo-Modus: Karten, Kreuze, Runden-State und Sieger direkt aus dem
@@ -319,17 +538,58 @@ export function useMultiplayer(
           winners: room.bingoState.winners || null,
         };
       }
+      // Bingo-Einstellungen ebenfalls vom Server übernehmen. Die URL-Query ist
+      // nur der Startwert; schaltet der Host im Spiel zwischen Timer und
+      // Warten um, kommt das allein über `roomState` an.
+      const s = room?.settings;
+      if (s?.gameMode === "bingo") {
+        if (s.bingoTimerMode === "timer" || s.bingoTimerMode === "wait-all") {
+          bingoSettings.timerMode = s.bingoTimerMode;
+        }
+        if (s.bingoDifficulty === "easy" || s.bingoDifficulty === "hard") {
+          bingoSettings.difficulty = s.bingoDifficulty;
+        }
+        const secs = Number(s.bingoTimerSeconds);
+        if (Number.isFinite(secs) && secs > 0) {
+          bingoSettings.timerSeconds = secs;
+        }
+        const toWin = Number(s.bingosToWin);
+        if (Number.isFinite(toWin) && toWin > 0) {
+          bingoSettings.bingosToWin = toWin;
+        }
+      }
     };
 
     // cardDrawn: Song-URL an alle – im all-clients-Modus Ready-Flow starten
     const onCardDrawn = ({ songUrl, audioMode, waitForReady, totalPlayers }) => {
       multiplayerAudioMode.value = audioMode;
+      serverReadyPending = !!(
+        audioMode === "all-clients" &&
+        songUrl &&
+        waitForReady
+      );
+      // „Jetzt abspielen“ eines früheren Songs gilt nicht mehr. Der eigene
+      // Knopf für genau diesen Song (Host im Modus „Nur Host“) bleibt.
+      if (songPlayPromptUrl.value && songPlayPromptUrl.value !== songUrl) {
+        songPlayPromptUrl.value = null;
+      }
+      // Ein neuer Song beendet eine offene Skip-Anfrage (der Host hat sie
+      // abgelehnt oder übergangen).
+      _skipRequestedAt = 0;
       if (audioMode === "all-clients" && songUrl && waitForReady) {
-        // Ready-Flow: URL speichern, auf Klick aller warten
+        // Ready-Flow: URL speichern, auf Klick aller warten. Das eigene Echo
+        // des Hosts kommt erst nach seinem Klick an; eine schon gegebene
+        // Bestätigung für genau diesen Song bleibt deshalb stehen.
+        const gleicherSong =
+          pendingSongUrl.value === songUrl &&
+          (songReadyConfirmed.value || _readyWantedUrl === songUrl);
         pendingSongUrl.value = songUrl;
-        songReadyCount.value = 0;
         songReadyTotal.value = totalPlayers;
-        songReadyConfirmed.value = false;
+        if (!gleicherSong) {
+          songReadyCount.value = 0;
+          songReadyConfirmed.value = false;
+          _readyWantedUrl = null;
+        }
         guestPendingSongUrl.value = null;
       } else if (!multiplayerIsHost.value) {
         // host-only: Gäste brauchen den Song nicht
@@ -337,9 +597,9 @@ export function useMultiplayer(
       }
     };
 
-    // stateUpdate: Gäste synchronisieren ihren lokalen State vom Host
-    const onStateUpdate = ({ gameState }) => {
-      if (multiplayerIsHost.value || !gameState) return;
+    // Spielstand des Hosts in den lokalen State spiegeln (Gast, und beim
+    // Host-Werden als Grundlage für die Übernahme).
+    const applyGameState = (gameState) => {
       if (gameState.playerTimelines) {
         playerTimelines.value = gameState.playerTimelines;
       }
@@ -368,8 +628,11 @@ export function useMultiplayer(
         // prevSongUrl`-Vergleich verhindert, dass wir nach dem Ready-Flow-
         // Ende (pendingSongUrl=null, currentCard unverändert) fälschlich
         // wieder sperren.
+        // Weiß der Client schon, dass kein Bereit-Ablauf offen ist (roomState
+        // oder `songReady:state` nach dem Neuladen), wird nicht gesperrt.
         if (
           multiplayerAudioMode.value === "all-clients" &&
+          serverReadyPending !== false &&
           newSongUrl &&
           newSongUrl !== prevSongUrl &&
           !songReadyConfirmed.value &&
@@ -461,9 +724,107 @@ export function useMultiplayer(
       }
     };
 
+    // stateUpdate: Gäste synchronisieren ihren lokalen State vom Host
+    const onStateUpdate = ({ gameState } = {}) => {
+      if (!gameState || typeof gameState !== "object") return;
+      lastGameState = gameState;
+      if (multiplayerIsHost.value) return;
+      applyGameState(gameState);
+    };
+
+    // Gast wird Host (Failover oder Rückkehr in einen Raum ohne Host): den
+    // letzten Spielstand samt Host-Feldern übernehmen und die Timer, die nur
+    // beim alten Host liefen, hier fortsetzen.
+    const becomeHost = (gs, message = "Du bist jetzt Host.") => {
+      if (gs && typeof gs === "object") {
+        applyGameState(gs);
+        // Beim Gast stehen diese Werte nur im Spiegel (guestSyncState), der
+        // Host arbeitet mit den echten Refs.
+        showGuessDialog.value = !!gs.showGuessDialog;
+        activeGuessPlayerIndex.value = gs.activeGuessPlayerIndex ?? null;
+        showObjectionDialog.value = !!gs.showObjectionDialog;
+        objectionAttempts.value = Array.isArray(gs.objectionAttempts)
+          ? [...gs.objectionAttempts]
+          : [];
+        adoptHostFields(gs.host);
+      }
+      // War man gerade selbst beim Raten, geht die Eingabe in den Host-Dialog.
+      if (
+        showGuessDialog.value &&
+        activeGuessPlayerIndex.value === guestSlotIndex.value
+      ) {
+        guessedTitle.value = guestGuessTitle.value || "";
+        guessedArtist.value = guestGuessArtist.value || "";
+        guessedYear.value = guestGuessYear.value || null;
+        guessedMovie.value = guestGuessMovie.value || "";
+      }
+      // Ein Ladevorgang des alten Hosts ist mit ihm verloren gegangen.
+      loadingNextSong.value = false;
+      multiplayerIsHost.value = true;
+      resumeObjectionTimers?.();
+      if (showFeedback.value) startFeedbackCountdown?.();
+      // Übernommenen Stand (mit Host-Feldern) sofort wieder ablegen.
+      syncMultiplayerState();
+      Notify.create({
+        type: "info",
+        message,
+        timeout: 2500,
+        position: "top",
+      });
+    };
+
+    // Host wird Gast: eigene Host-Timer anhalten und den aktuellen Stand
+    // beim Server anfordern (`stateUpdate` und `songReady:state`).
+    const becomeGuest = () => {
+      multiplayerIsHost.value = false;
+      if (_syncDebounceTimer) {
+        clearTimeout(_syncDebounceTimer);
+        _syncDebounceTimer = null;
+      }
+      clearObjectionTimers?.();
+      showGuessDialog.value = false;
+      showObjectionDialog.value = false;
+      socketEmit("guest:requestSync", {});
+    };
+
+    // Antwort auf `guest:requestSync`: Stand des Bereit-Ablaufs. Nur wenn er
+    // wirklich offen ist, bleibt bzw. kommt „Song öffnen“; sonst aufräumen.
+    const onSongReadyState = ({ pending, songUrl } = {}) => {
+      serverReadyPending = !!pending;
+      if (pending && songUrl) {
+        if (pendingSongUrl.value !== songUrl) {
+          pendingSongUrl.value = songUrl;
+          songReadyConfirmed.value = false;
+          songReadyCount.value = 0;
+          songReadyTotal.value = lastRoomPlayers.length;
+          guestPendingSongUrl.value = null;
+        }
+      } else if (pendingSongUrl.value) {
+        resetSongReady();
+      }
+      // Eigene Bestätigung nachreichen (nach dem Wiederverbinden oder wenn
+      // der Klick ohne Verbindung kam). Der Server zählt jeden Platz nur
+      // einmal, ein doppeltes Senden schadet nicht.
+      if (resendReadyOnState) {
+        resendReadyOnState = false;
+        if (pending && songUrl && _readyWantedUrl === songUrl) {
+          if (socketEmit("player:songReady", {})) {
+            songReadyConfirmed.value = true;
+          }
+        }
+      }
+    };
+
     // HOST: Gast möchte Karte ziehen
     const onGuestDrawCard = ({ fromUsername }) => {
       if (!multiplayerIsHost.value) return;
+      // Doppeltipp des Gastes oder spät ankommendes Event: Läuft schon ein
+      // Ladevorgang oder liegt bereits eine Karte im Spiel, nichts tun.
+      // Sonst würde ein weiterer Song verbraucht und die Bereit-Klicks
+      // der Runde zurückgesetzt.
+      if (loadingNextSong.value) return;
+      if (currentCard.value) return;
+      if (pendingSongUrl.value) return;
       Notify.create({
         type: "info",
         message: `${fromUsername} zieht eine Karte...`,
@@ -472,9 +833,14 @@ export function useMultiplayer(
       drawNewCard();
     };
 
+    // Alle `guest:*`-Handler prüfen den Absender (`fromSlotIndex` vom Server)
+    // gegen seine Rolle. Ungültiges wird still verworfen, damit ein Gast per
+    // Devtools nicht für andere Spieler handeln kann.
+
     // HOST: Gast möchte Karte platzieren
-    const onGuestPlaceCard = ({ playerIndex, position }) => {
+    const onGuestPlaceCard = (payload = {}) => {
       if (!multiplayerIsHost.value) return;
+      const { playerIndex, position } = payload;
       // Sicherheit gegen späten Klick nach Skip / Feedback / Song noch
       // nicht geöffnet: nur akzeptieren, wenn beim Host aktuell eine
       // Karte auf dem Tisch ist und noch nicht platziert wurde.
@@ -482,7 +848,11 @@ export function useMultiplayer(
       if (state.playerHasGuessed?.value) return;
       if (state.showFeedback?.value) return;
       if (state.pendingSongUrl?.value) return;
-      placeCard(playerIndex, position);
+      const actor = senderTimelineIndex(payload);
+      if (actor < 0) return;
+      // placeCard lässt nur den Spieler am Zug bzw. in der Einwandphase den
+      // aktuellen Einwender legen.
+      placeCard(playerIndex, position, actor);
     };
 
     // HOST: Gast möchte Song skippen – Bestätigung anfordern
@@ -493,12 +863,21 @@ export function useMultiplayer(
     };
 
     // HOST: Gast sendet seine Rateeingabe
-    const onGuestSubmitGuess = ({ title, artist, year, movie }) => {
+    const onGuestSubmitGuess = (payload = {}) => {
       if (!multiplayerIsHost.value) return;
+      const { title, artist, year, movie } = payload;
       // Dieselbe Sicherheit wie bei onGuestPlaceCard: nur wenn wirklich
       // eine Platzierung offen ist. Verhindert, dass ein spät ankommender
       // Guess nach einem Skip die Runde erneut auflöst.
       if (!state.pendingPlacement?.value) return;
+      // Doppelt abgeschickt: Die Platzierung ist schon ausgewertet (das
+      // Einwandfenster läuft gerade). Eine zweite Auswertung würde die
+      // Bonuspunkte erneut berechnen und die Einwände neu starten.
+      if (state.pendingPlacementResult?.value) return;
+      // Raten darf nur, wer die Karte gelegt hat.
+      if (senderTimelineIndex(payload) !== pendingPlacement.value.playerIndex) {
+        return;
+      }
       guessedTitle.value = title || "";
       guessedArtist.value = artist || "";
       guessedYear.value = year || null;
@@ -507,20 +886,38 @@ export function useMultiplayer(
     };
 
     // HOST: Gast beginnt einen Einwand
-    const onGuestBeginObjection = ({ playerIndex }) => {
+    // Einwand nur für den eigenen Slot.
+    const onGuestBeginObjection = (payload = {}) => {
       if (!multiplayerIsHost.value) return;
-      beginObjection(playerIndex);
+      const actor = senderTimelineIndex(payload);
+      if (actor < 0) return;
+      if (payload.playerIndex !== undefined && payload.playerIndex !== actor) {
+        return;
+      }
+      beginObjection(actor);
     };
 
-    // HOST: Gast meldet sich im Opt-in-Fenster (ab), Host führt die Umschaltung aus.
-    const onGuestToggleObjectionOptIn = ({ playerIndex }) => {
+    // HOST: Gast meldet sich im Opt-in-Fenster (ab), Host führt die
+    // Umschaltung aus. Auch hier nur für den eigenen Slot.
+    const onGuestToggleObjectionOptIn = (payload = {}) => {
       if (!multiplayerIsHost.value) return;
-      toggleObjectionOptIn(playerIndex);
+      const actor = senderTimelineIndex(payload);
+      if (actor < 0) return;
+      if (payload.playerIndex !== undefined && payload.playerIndex !== actor) {
+        return;
+      }
+      toggleObjectionOptIn(actor);
       syncMultiplayerState();
     };
 
-    const onGuestCancelGuessAndReplace = () => {
+    // Platzierung zurücknehmen darf nur der Platzierende, und nur solange
+    // sie noch nicht ausgewertet ist (danach läuft das Einwandfenster).
+    const onGuestCancelGuessAndReplace = (payload = {}) => {
       if (!multiplayerIsHost.value) return;
+      if (!pendingPlacement.value || pendingPlacementResult.value) return;
+      if (senderTimelineIndex(payload) !== pendingPlacement.value.playerIndex) {
+        return;
+      }
       cancelGuessAndReplace();
     };
 
@@ -545,9 +942,13 @@ export function useMultiplayer(
     };
 
     // song:openNow: Alle bereit – Song jetzt öffnen
+    // Das Ereignis kommt ohne Klick an. Die Desktop-App öffnet trotzdem,
+    // im Browser blockiert ohne Nutzergeste aber `spotify:` bzw. das Popup;
+    // dann erscheint im Kopf der Knopf „Jetzt abspielen“.
     const onSongOpenNow = ({ songUrl }) => {
-      openSongTab(songUrl);
+      serverReadyPending = false;
       resetSongReady();
+      openSongOrPrompt(songUrl);
     };
 
     // GAST / HOST: Live-Tipp-Sync (eigene Eingabe senden)
@@ -655,6 +1056,8 @@ export function useMultiplayer(
       pendingPlacement.value = null;
       resetGuestObjectionUi();
       guestPendingSongUrl.value = null;
+      songPlayPromptUrl.value = null;
+      serverReadyPending = false;
       guestGuessTitle.value = "";
       guestGuessArtist.value = "";
       guestGuessYear.value = null;
@@ -666,11 +1069,19 @@ export function useMultiplayer(
         movie: "",
       };
       resetSongReady();
-      Notify.create({
-        type: "positive",
-        message: "Host hat den Skip bestätigt",
-        timeout: 2000,
-      });
+      // Die Rückmeldung gilt nur dem Gast, der um den Skip gebeten hat, und
+      // nur einmal. Andere Skips (auch eine abgebrochene Bingo-Runde) laufen
+      // ohne Hinweis.
+      const angefragt =
+        _skipRequestedAt && Date.now() - _skipRequestedAt < 2 * 60 * 1000;
+      _skipRequestedAt = 0;
+      if (angefragt) {
+        Notify.create({
+          type: "positive",
+          message: "Der Host hat den Skip bestätigt.",
+          timeout: 2000,
+        });
+      }
     };
 
     // GAST: Host schickt alle zur Lobby zurück
@@ -723,7 +1134,7 @@ export function useMultiplayer(
         songPool: effectivePools[0] || "staffel1",
         audioMode: room.audioMode,
         mode,
-        names: players.map((p) => p.slotName).join(","),
+        names: encodeNamesQuery(players.map((p) => p.slotName)),
         players: players.length,
       };
       if (isBattle) {
@@ -792,6 +1203,7 @@ export function useMultiplayer(
       resetGuestObjectionUi();
       activeGuessDisplay.value = { title: "", artist: "", year: null, movie: "" };
       resetSongReady();
+      songPlayPromptUrl.value = null;
       Notify.create({
         type: "info",
         message: "Neue Runde gestartet!",
@@ -800,7 +1212,16 @@ export function useMultiplayer(
       });
     };
 
+    // Fehlermeldungen des Servers auch in der Spielansicht zeigen (bisher
+    // hörte nur die Lobby zu). Antworten mit Callback kommen nicht zusätzlich
+    // als `error`, ein Hinweis erscheint also nur einmal.
+    const onSocketError = ({ message } = {}) => {
+      if (!message) return;
+      Notify.create({ type: "negative", message, timeout: 3500 });
+    };
+
     socketOn("roomState", onRoomState);
+    socketOn("error", onSocketError);
     socketOn("cardDrawn", onCardDrawn);
     socketOn("stateUpdate", onStateUpdate);
     socketOn("guest:drawCard", onGuestDrawCard);
@@ -815,6 +1236,7 @@ export function useMultiplayer(
     socketOn("host:confirmSkip", onHostConfirmSkip);
     socketOn("song:readyUpdate", onSongReadyUpdate);
     socketOn("song:openNow", onSongOpenNow);
+    socketOn("songReady:state", onSongReadyState);
     socketOn("returnToLobby", onReturnToLobby);
     socketOn("gameStarted", onGameStartedInGame);
     socketOn("syncGameOver", onSyncGameOver);
@@ -824,19 +1246,34 @@ export function useMultiplayer(
       socketEmit("guest:requestSync", {});
     }
 
-    const mySlotName = !multiplayerIsHost.value
-      ? (route.query.names || "").split(",")[guestSlotIndex.value] || ""
-      : "";
+    // Auch für den Host bestimmen: wird er später Gast (Host-Wechsel), meldet
+    // er sich beim Wiederverbinden mit seinem Slot.
+    const mySlotName =
+      decodeNamesQuery(route.query.names)[guestSlotIndex.value] || "";
     const onSocketConnect = () => {
       socketEmit("joinRoom", {
         roomCode: multiplayerRoomCode.value,
         slotName: multiplayerIsHost.value ? "" : mySlotName,
       });
-      if (!multiplayerIsHost.value) {
+      // Hatte dieser Client für den offenen Song schon „bereit“ gedrückt,
+      // ist das beim Server mit dem alten Socket verloren gegangen. Den
+      // Stand des Ablaufs holt `guest:requestSync` (auch für den Host).
+      resendReadyOnState =
+        !!_readyWantedUrl && pendingSongUrl.value === _readyWantedUrl;
+      if (!multiplayerIsHost.value || resendReadyOnState) {
         socketEmit("guest:requestSync", {});
       }
     };
     socket.on("connect", onSocketConnect);
+    // Host mit schon verbundenem Socket (kommt aus der Lobby): Das connect-
+    // Ereignis bleibt aus, den roomState für die Prüfung oben fordert ein
+    // erneutes joinRoom an (für den Server ein reiner Reconnect).
+    if (multiplayerIsHost.value && socket.connected) {
+      socketEmit("joinRoom", {
+        roomCode: multiplayerRoomCode.value,
+        slotName: "",
+      });
+    }
 
     _cleanup = () => {
       stopWatchHostGuess();
@@ -847,7 +1284,14 @@ export function useMultiplayer(
         _syncDebounceTimer = null;
       }
       socket.off("connect", onSocketConnect);
+      if (holdTimer) {
+        clearTimeout(holdTimer);
+        holdTimer = null;
+      }
+      _holdHostSync = false;
+      _hostSyncHeld = false;
       socketOff("roomState", onRoomState);
+      socketOff("error", onSocketError);
       socketOff("cardDrawn", onCardDrawn);
       socketOff("stateUpdate", onStateUpdate);
       socketOff("guest:drawCard", onGuestDrawCard);
@@ -868,6 +1312,7 @@ export function useMultiplayer(
       socketOff("host:confirmSkip", onHostConfirmSkip);
       socketOff("song:readyUpdate", onSongReadyUpdate);
       socketOff("song:openNow", onSongOpenNow);
+      socketOff("songReady:state", onSongReadyState);
       socketOff("returnToLobby", onReturnToLobby);
       socketOff("gameStarted", onGameStartedInGame);
       socketOff("syncGameOver", onSyncGameOver);

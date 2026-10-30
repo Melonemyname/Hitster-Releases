@@ -1,16 +1,26 @@
 <template>
+  <!-- aria-labelledby landet bei QDialog direkt auf dem role="dialog"-Element
+       und gibt dem Dialog den sichtbaren Titel als zugänglichen Namen. -->
   <q-dialog
     :model-value="modelValue"
+    :aria-labelledby="titleId"
     @update:model-value="(v) => $emit('update:modelValue', v)"
   >
     <q-card class="share-card">
       <q-card-section class="row items-center q-pb-none">
         <q-icon name="group_add" size="22px" class="q-mr-sm" />
-        <div class="text-h6">
+        <div :id="titleId" class="text-h6">
           {{ mode === "create" ? "An Accounts freigeben" : "Freigaben verwalten" }}
         </div>
         <q-space />
-        <q-btn v-close-popup icon="close" flat round dense />
+        <q-btn
+          v-close-popup
+          icon="close"
+          flat
+          round
+          dense
+          aria-label="Schließen"
+        />
       </q-card-section>
 
       <q-card-section>
@@ -19,8 +29,7 @@
         </div>
         <div
           v-if="mode === 'create'"
-          class="text-caption q-mb-md"
-          style="opacity: 0.8"
+          class="text-caption text-muted q-mb-md"
         >
           Beim Freigeben wird diese Version zu einer eingeschränkten Version und
           liegt danach nur noch auf dem Server. Die berechtigten Accounts
@@ -29,29 +38,55 @@
         </div>
 
         <div v-if="loading" class="text-center q-py-md">
-          <q-spinner color="primary" size="28px" />
+          <q-spinner
+            color="primary"
+            size="28px"
+            role="status"
+            aria-label="Accounts werden geladen"
+          />
         </div>
         <template v-else>
           <div
-            v-if="!users.length"
-            class="text-caption q-py-md"
-            style="opacity: 0.7"
+            v-if="loadFailed"
+            class="text-caption text-muted q-py-md"
+            role="status"
+          >
+            Accounts konnten nicht geladen werden. Zum erneuten Versuch den
+            Dialog schließen und wieder öffnen.
+          </div>
+          <div
+            v-else-if="!users.length"
+            class="text-caption text-muted q-py-md"
           >
             Keine weiteren Accounts vorhanden.
           </div>
           <q-list v-else dense class="account-list">
+            <!-- Der Ersteller bleibt serverseitig immer freigegeben. Bearbeitet
+                 ein Admin eine fremde Version, steht der Ersteller deshalb
+                 angehakt und gesperrt in der Liste statt wählbar. -->
             <q-item
               v-for="u in users"
               :key="u.id"
               tag="label"
-              clickable
+              :clickable="u.id !== creatorId"
             >
               <q-item-section avatar>
-                <q-checkbox v-model="selected" :val="u.id" color="primary" />
+                <q-checkbox
+                  v-model="selected"
+                  :val="u.id"
+                  color="primary"
+                  :disable="u.id === creatorId"
+                />
               </q-item-section>
               <q-item-section>
                 <q-item-label class="ellipsis" :title="u.username">
                   {{ u.username }}
+                </q-item-label>
+                <q-item-label v-if="u.id === creatorId" caption class="text-muted">
+                  Ersteller, immer freigegeben
+                </q-item-label>
+                <q-item-label v-else-if="u.id === myId" caption class="text-muted">
+                  Du
                 </q-item-label>
               </q-item-section>
             </q-item>
@@ -60,12 +95,16 @@
       </q-card-section>
 
       <q-card-actions align="right" class="q-pa-md">
-        <q-btn v-close-popup flat label="Abbrechen" color="grey-7" />
+        <q-btn v-close-popup flat label="Abbrechen" />
+        <!-- Gesperrt, solange die Accounts laden oder das Laden scheiterte:
+             Sonst ginge eine leere Auswahl an den Server und nähme allen
+             bisherigen Accounts die Freigabe. -->
         <q-btn
           color="primary"
           :icon="mode === 'create' ? 'group_add' : 'save'"
           :label="mode === 'create' ? 'Freigeben' : 'Speichern'"
           :loading="saving"
+          :disable="loading || loadFailed"
           @click="onConfirm"
         />
       </q-card-actions>
@@ -74,7 +113,7 @@
 </template>
 
 <script>
-import { ref, watch } from "vue";
+import { ref, watch, useId } from "vue";
 import { Notify } from "quasar";
 import { useVersions } from "../composables/useVersions";
 import { fetchAssignableUsers } from "../utils/restrictedVersionsService";
@@ -93,31 +132,62 @@ export default {
   },
   emits: ["update:modelValue", "shared"],
   setup(props, { emit }) {
+    // Eindeutige ID für den Dialogtitel (aria-labelledby).
+    const titleId = `share-version-title-${useId()}`;
     const { shareCustomVersion, setRestrictedAccess } = useVersions();
     const users = ref([]);
     const selected = ref([]);
     const loading = ref(false);
+    const loadFailed = ref(false);
     const saving = ref(false);
+    const myId = ref(null);
+    // Ersteller der Version (beim Teilen man selbst, bei Seeds null).
+    const creatorId = ref(null);
 
     watch(
       () => props.modelValue,
       async (open) => {
         if (!open) return;
         selected.value = [];
+        users.value = [];
+        loadFailed.value = false;
         loading.value = true;
+        myId.value = getUserId();
+        const rv =
+          props.mode === "access"
+            ? getRestrictedVersion(props.versionValue)
+            : null;
+        creatorId.value =
+          props.mode === "create" ? myId.value : rv?.creatorId || null;
         try {
           const list = await fetchAssignableUsers();
-          const myId = getUserId();
-          // Sich selbst ausblenden: der Ersteller bekommt seine Version ohnehin.
-          users.value = list.filter((u) => u.id !== myId);
+          // Sich selbst nur ausblenden, wenn man der Ersteller ist: Den hält
+          // der Server ohnehin in der Liste. Ein Admin, der eine fremde Version
+          // verwaltet, ist dagegen ein gewöhnlicher Eintrag; ihn auszufiltern
+          // hieße, sich beim Speichern selbst die Freigabe zu entziehen.
+          const hideSelf = !!myId.value && creatorId.value === myId.value;
+          users.value = hideSelf
+            ? list.filter((u) => u.id !== myId.value)
+            : list;
           if (props.mode === "access") {
-            const rv = getRestrictedVersion(props.versionValue);
             const allowed = Array.isArray(rv?.allowedUserIds)
               ? rv.allowedUserIds
               : [];
-            selected.value = allowed.filter((id) => id !== myId);
+            selected.value = hideSelf
+              ? allowed.filter((id) => id !== myId.value)
+              : [...allowed];
+            // Der Ersteller ist immer freigegeben, auch wenn die Liste ihn
+            // einmal nicht führt.
+            if (
+              !hideSelf &&
+              creatorId.value &&
+              !selected.value.includes(creatorId.value)
+            ) {
+              selected.value.push(creatorId.value);
+            }
           }
         } catch (e) {
+          loadFailed.value = true;
           Notify.create({
             type: "negative",
             message: `Accounts konnten nicht geladen werden: ${e.message}`,
@@ -131,15 +201,21 @@ export default {
     );
 
     const onConfirm = async () => {
+      if (loading.value || loadFailed.value) return;
       saving.value = true;
       try {
         if (props.mode === "create") {
-          await shareCustomVersion(props.versionValue, selected.value);
+          // Der Server kann der geteilten Version einen neuen value geben.
+          const sharedValue = await shareCustomVersion(
+            props.versionValue,
+            selected.value,
+          );
           Notify.create({
             type: "positive",
             message: "Version freigegeben.",
             timeout: 2000,
           });
+          emit("shared", { mode: props.mode, value: sharedValue });
         } else {
           await setRestrictedAccess(props.versionValue, selected.value);
           Notify.create({
@@ -147,8 +223,8 @@ export default {
             message: "Freigaben gespeichert.",
             timeout: 2000,
           });
+          emit("shared", { mode: props.mode, value: props.versionValue });
         }
-        emit("shared", { mode: props.mode });
         emit("update:modelValue", false);
       } catch (e) {
         Notify.create({
@@ -161,7 +237,17 @@ export default {
       }
     };
 
-    return { users, selected, loading, saving, onConfirm };
+    return {
+      titleId,
+      users,
+      selected,
+      loading,
+      loadFailed,
+      saving,
+      myId,
+      creatorId,
+      onConfirm,
+    };
   },
 };
 </script>

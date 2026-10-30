@@ -11,9 +11,10 @@
       <router-view :key="$route.path + ':' + ($route.query.mode || '')" />
     </q-page-container>
 
-    <!-- Globaler Zugang zu Profil & Theming: ein Button mit Menü.
-         (Theming gehört ohnehin zum Konto; ein Button vermeidet die frühere
-         Überlappung mit dem Abmelden-Button auf der Profilseite.) -->
+    <!-- Globaler Zugang zum Konto: ein Button mit Menü (Profil bzw. Anmelden,
+         Rangliste, Nutzerverwaltung, Abmelden). Design, Versionen und die
+         Einstellungen der Desktop-App liegen im Hauptmenü unter „Versionen"
+         und „Optionen". -->
     <div class="top-fabs">
       <q-btn
         round
@@ -21,93 +22,55 @@
         size="sm"
         class="top-fab"
         :padding="avatarSrc ? 'none' : 'xs'"
-        aria-label="Konto & Design"
+        aria-label="Konto"
       >
         <q-avatar v-if="avatarSrc" size="32px">
           <img :src="avatarSrc" alt="Profilbild" />
         </q-avatar>
         <q-icon v-else name="account_circle" />
+        <!-- ARIA-Struktur: QMenu trägt role="menu", das verlangt Menüpunkte
+             als direkte Kinder. QList (role="list") und QItem (role="listitem")
+             passen da nicht hinein. Deshalb ist die Liste hier rein optisch
+             (role="none") und jeder Eintrag ein role="menuitem". Der Trenner
+             vor „Abmelden" bleibt role="separator", das ist in Menüs erlaubt. -->
         <q-menu anchor="bottom right" self="top right">
-          <q-list style="min-width: 190px">
+          <q-list role="none" style="min-width: 190px">
             <q-item
               v-if="loggedIn"
               v-close-popup
+              role="menuitem"
               clickable
               @click="goToProfile"
             >
               <q-item-section avatar><q-icon name="person" /></q-item-section>
               <q-item-section>Mein Profil</q-item-section>
             </q-item>
-            <q-item v-else v-close-popup clickable @click="goToLogin">
+            <q-item v-else v-close-popup role="menuitem" clickable @click="goToLogin">
               <q-item-section avatar><q-icon name="login" /></q-item-section>
               <q-item-section>Anmelden</q-item-section>
             </q-item>
 
+            <!-- Optionen (Design, Server, Songs-Ordner, Nutzerverwaltung) auch
+                 im Spiel erreichbar, nicht nur über das Hauptmenü. Rangliste
+                 und Nutzerverwaltung stehen nicht mehr hier: Die Rangliste hat
+                 ihr Symbol im Hauptmenü, die Nutzerverwaltung liegt unter
+                 Optionen. -->
             <q-item
-              v-if="loggedIn"
               v-close-popup
+              role="menuitem"
               clickable
-              @click="goToLeaderboard"
+              @click="showOptionsDialog = true"
             >
-              <q-item-section avatar
-                ><q-icon name="leaderboard"
-              /></q-item-section>
-              <q-item-section>Rangliste</q-item-section>
+              <q-item-section avatar><q-icon name="settings" /></q-item-section>
+              <q-item-section>Optionen</q-item-section>
             </q-item>
 
-            <!-- Nutzerverwaltung: nur für den Server-Owner (Admin), erkannt am
-                 vom Server gelieferten isAdmin-Flag. Der Server prüft final
-                 selbst; der Menüpunkt wird für alle anderen ausgeblendet. -->
-            <q-item
-              v-if="loggedIn && isAdmin"
-              v-close-popup
-              clickable
-              @click="goToAdmin"
-            >
-              <q-item-section avatar>
-                <q-icon name="admin_panel_settings" />
-              </q-item-section>
-              <q-item-section>Nutzerverwaltung</q-item-section>
-            </q-item>
-
-            <q-item v-close-popup clickable @click="showThemeDialog = true">
-              <q-item-section avatar><q-icon name="palette" /></q-item-section>
-              <q-item-section>Design anpassen</q-item-section>
-            </q-item>
-
-            <q-item v-close-popup clickable @click="showVersionsDialog = true">
-              <q-item-section avatar><q-icon name="tune" /></q-item-section>
-              <q-item-section>Versionen verwalten</q-item-section>
-            </q-item>
-
-            <!-- Nur in der Desktop-App relevant; im Browser läuft alles über
-                 die aufgerufene Adresse (same-origin). -->
-            <q-item
-              v-if="isDesktopApp"
-              v-close-popup
-              clickable
-              @click="showServerDialog = true"
-            >
-              <q-item-section avatar><q-icon name="dns" /></q-item-section>
-              <q-item-section>Server-Verbindung</q-item-section>
-            </q-item>
-
-            <!-- Songs-Ordner: nur in der Desktop-App; dort liegen die
-                 bearbeitbaren Song-Daten (Editionen, Links, Metadaten, Cover). -->
-            <q-item
-              v-if="isDesktopApp"
-              v-close-popup
-              clickable
-              @click="showSongFolderDialog = true"
-            >
-              <q-item-section avatar><q-icon name="folder_open" /></q-item-section>
-              <q-item-section>Songs-Ordner</q-item-section>
-            </q-item>
-
-            <!-- "Immer im Vordergrund": hält NUR das Hauptfenster oben; das
-                 App-eigene Song-Fenster bleibt normal und darf sich davorlegen.
-                 Kein v-close-popup, damit das Menü beim Umschalten offen bleibt. -->
-            <q-item v-if="isDesktopApp">
+            <!-- „Immer im Vordergrund“ bleibt hier und nicht unter Optionen im
+                 Hauptmenü: Man schaltet es gerade während eines Spiels um,
+                 wenn Spotify sich davorschiebt. Es hält NUR das Hauptfenster
+                 oben. Kein v-close-popup, damit das Menü beim Umschalten offen
+                 bleibt. -->
+            <q-item v-if="isDesktopApp" role="menuitem">
               <q-item-section avatar>
                 <q-icon name="flip_to_front" />
               </q-item-section>
@@ -124,11 +87,14 @@
 
             <template v-if="loggedIn">
               <q-separator />
-              <q-item v-close-popup clickable @click="handleLogout">
+              <q-item v-close-popup role="menuitem" clickable @click="handleLogout">
+                <!-- Rot nur am Symbol: Die Quasar-Negativfarbe erreicht als
+                     Schrift auf der dunklen Menüfläche keine 4,5:1. Die
+                     Beschriftung folgt deshalb der normalen Flächenschrift. -->
                 <q-item-section avatar>
                   <q-icon name="logout" color="negative" />
                 </q-item-section>
-                <q-item-section class="text-negative">Abmelden</q-item-section>
+                <q-item-section>Abmelden</q-item-section>
               </q-item>
             </template>
           </q-list>
@@ -136,10 +102,7 @@
       </q-btn>
     </div>
 
-    <ThemeDialog v-model="showThemeDialog" />
-    <VersionsDialog v-model="showVersionsDialog" />
-    <ServerDialog v-model="showServerDialog" />
-    <SongFolderDialog v-model="showSongFolderDialog" />
+    <OptionsDialog v-model="showOptionsDialog" />
   </q-layout>
 </template>
 
@@ -147,15 +110,10 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount } from "vue";
 import { useQuasar } from "quasar";
 import { useRouter } from "vue-router";
-import ThemeDialog from "../components/ThemeDialog.vue";
-import VersionsDialog from "../components/VersionsDialog.vue";
-import ServerDialog from "../components/ServerDialog.vue";
-import SongFolderDialog from "../components/SongFolderDialog.vue";
 import { useTheme } from "../composables/useTheme";
 import { useProfile } from "../composables/useProfile";
 import { useVersions } from "../composables/useVersions";
 import {
-  adminState,
   isLoggedIn,
   loggedInState,
   logout,
@@ -163,13 +121,15 @@ import {
 } from "../utils/authService";
 import { avatarUrl } from "../utils/profileService";
 import { disconnect } from "../utils/socketService";
+import { readCustomVersions } from "../utils/customVersionsStore";
 import { isDesktopApp as detectDesktopApp } from "../utils/platform";
+import OptionsDialog from "../components/OptionsDialog.vue";
 
 const LOBBY_ROOM_KEY = "hitster-lobby-room";
 
 export default {
   name: "MainLayout",
-  components: { ThemeDialog, VersionsDialog, ServerDialog, SongFolderDialog },
+  components: { OptionsDialog },
   setup() {
     // Die App ist durchgehend dunkel gestaltet (dunkle Karten, heller Text).
     // Dark-Mode fest aktivieren, damit Flächen unabhängig vom OS korrekt
@@ -187,7 +147,6 @@ export default {
     // gelesen – das griff zu spät bzw. gar nicht, weshalb das Profilbild im FAB
     // nach dem Anmelden leer blieb, bis man einmal die Profilseite aufrief.
     const loggedIn = loggedInState;
-    const isAdmin = adminState;
 
     // Profilbild des angemeldeten Nutzers für das FAB-Icon. Der Profil-Zustand
     // ist app-weit geteilt (useProfile), damit ein im Profil geändertes Bild
@@ -254,31 +213,110 @@ export default {
 
     const goToProfile = () => router.push("/profile");
     const goToLogin = () => router.push("/login");
-    const goToLeaderboard = () => router.push("/leaderboard");
-    const goToAdmin = () => router.push("/admin");
-    const handleLogout = () => {
+    const doLogout = () => {
       // Lobby-Zustand aufräumen, damit nach erneutem Login kein alter Raum
       // automatisch wieder beigetreten wird.
       try {
         sessionStorage.removeItem(LOBBY_ROOM_KEY);
       } catch {
-        /* Speicher nicht verfügbar – ignorieren */
+        /* Speicher nicht verfügbar, ignorieren */
       }
       disconnect();
       logout();
       router.push("/login");
     };
+    // Beim Abmelden verschwinden die mit dem Konto verbundenen Versionen vom
+    // Gerät (sonst landeten sie im nächsten Konto). Noch nicht hochgeladene
+    // Änderungen gingen dabei still verloren, deshalb vorher nachfragen.
+    const handleLogout = () => {
+      const offen = readCustomVersions().filter(
+        (v) => v.synced && v.pendingPush,
+      );
+      if (offen.length === 0) {
+        doLogout();
+        return;
+      }
+      const namen = offen.map((v) => `„${v.label}“`).join(", ");
+      $q.dialog({
+        title: "Änderungen noch nicht hochgeladen",
+        message:
+          offen.length === 1
+            ? `Die Version ${namen} hat Änderungen, die noch nicht auf dem Server sind. Beim Abmelden gehen sie verloren.`
+            : `Die Versionen ${namen} haben Änderungen, die noch nicht auf dem Server sind. Beim Abmelden gehen sie verloren.`,
+        cancel: { label: "Angemeldet bleiben", flat: true },
+        ok: { label: "Trotzdem abmelden", color: "negative" },
+        persistent: true,
+      }).onOk(doLogout);
+    };
 
-    const showThemeDialog = ref(false);
-    const showVersionsDialog = ref(false);
-    const showServerDialog = ref(false);
-    const showSongFolderDialog = ref(false);
-    // Desktop-App (Electron): dort wird die Server-Adresse gebraucht; im Browser
-    // nicht (same-origin). MODE wird zur Buildzeit gesetzt; file:// als Fallback.
+    // Auto-Update sichtbar machen: informieren, wenn im Hintergrund eine neue
+    // Version geladen wird bzw. bereit ist. Fehler werden bewusst NICHT als
+    // Toast gezeigt (rpm/deb erzeugen bei jedem Start einen erwarteten Fehler).
+    let unsubscribeUpdate = null;
+    // Jede Meldung nur einmal zeigen: Derselbe Stand kann live kommen und
+    // zusätzlich über getUpdateStatus beim Einhängen.
+    let shownAvailable = false;
+    let shownDownloaded = false;
+    const handleUpdateEvent = (data) => {
+      if (!data) return;
+      if (data.status === "available") {
+        if (shownAvailable) return;
+        shownAvailable = true;
+        $q.notify({
+          type: "info",
+          message: `Neue Version ${data.version || ""} wird im Hintergrund geladen…`,
+          timeout: 3000,
+        });
+      } else if (data.status === "downloaded") {
+        if (shownDownloaded) return;
+        shownDownloaded = true;
+        // Wichtig: ohne expliziten `quitAndInstall` startet Windows den
+        // NSIS-Installer manchmal nicht selbst beim regulären Quit -
+        // deshalb einen Aktionsknopf anbieten. `timeout: 0` = bleibt
+        // stehen bis der Nutzer entscheidet.
+        $q.notify({
+          type: "positive",
+          message: `Update ${data.version || ""} ist bereit. Jetzt installieren?`,
+          timeout: 0,
+          position: "top",
+          actions: [
+            {
+              label: "Jetzt installieren",
+              color: "white",
+              handler: () => {
+                try {
+                  window.hitster?.installUpdate?.();
+                } catch (err) {
+                  console.warn("[update] installUpdate fehlgeschlagen:", err);
+                }
+              },
+            },
+            { label: "Später", color: "white", handler: () => {} },
+          ],
+        });
+      }
+    };
+    onMounted(async () => {
+      if (typeof window === "undefined" || !window.hitster?.onUpdateEvent)
+        return;
+      unsubscribeUpdate = window.hitster.onUpdateEvent(handleUpdateEvent);
+      // Kam die Meldung schon, bevor wir zugehört haben (Update lag fertig
+      // im Cache), den gemerkten Stand nachholen. Ältere Apps ohne diese
+      // Abfrage überspringen das.
+      try {
+        handleUpdateEvent(await window.hitster.getUpdateStatus?.());
+      } catch {
+        // Kein Stand abrufbar, die Live-Meldungen reichen dann.
+      }
+    });
+    onBeforeUnmount(() => {
+      if (unsubscribeUpdate) unsubscribeUpdate();
+    });
+
+    // „Immer im Vordergrund“ (nur Desktop-App): Startwert aus dem
+    // Main-Prozess, dort ist die Wahl gespeichert.
     const isDesktopApp = detectDesktopApp();
-
-    // "Immer im Vordergrund" (nur Hauptfenster). Startwert aus dem Main-Prozess
-    // laden (persistiert), damit der Toggle den tatsächlichen Fensterzustand zeigt.
+    const showOptionsDialog = ref(false);
     const alwaysOnTop = ref(false);
     onMounted(async () => {
       if (!window.hitster?.getAlwaysOnTop) return;
@@ -297,68 +335,15 @@ export default {
       }
     };
 
-    // Auto-Update sichtbar machen: informieren, wenn im Hintergrund eine neue
-    // Version geladen wird bzw. bereit ist. Fehler werden bewusst NICHT als
-    // Toast gezeigt (rpm/deb erzeugen bei jedem Start einen erwarteten Fehler).
-    let unsubscribeUpdate = null;
-    onMounted(() => {
-      if (typeof window === "undefined" || !window.hitster?.onUpdateEvent)
-        return;
-      unsubscribeUpdate = window.hitster.onUpdateEvent((data) => {
-        if (!data) return;
-        if (data.status === "available") {
-          $q.notify({
-            type: "info",
-            message: `Neue Version ${data.version || ""} wird im Hintergrund geladen…`,
-            timeout: 3000,
-          });
-        } else if (data.status === "downloaded") {
-          // Wichtig: ohne expliziten `quitAndInstall` startet Windows den
-          // NSIS-Installer manchmal nicht selbst beim regulären Quit -
-          // deshalb einen Aktionsknopf anbieten. `timeout: 0` = bleibt
-          // stehen bis der Nutzer entscheidet.
-          $q.notify({
-            type: "positive",
-            message: `Update ${data.version || ""} ist bereit. Jetzt installieren?`,
-            timeout: 0,
-            position: "top",
-            actions: [
-              {
-                label: "Jetzt installieren",
-                color: "white",
-                handler: () => {
-                  try {
-                    window.hitster?.installUpdate?.();
-                  } catch (err) {
-                    console.warn("[update] installUpdate fehlgeschlagen:", err);
-                  }
-                },
-              },
-              { label: "Später", color: "white", handler: () => {} },
-            ],
-          });
-        }
-      });
-    });
-    onBeforeUnmount(() => {
-      if (unsubscribeUpdate) unsubscribeUpdate();
-    });
-
     return {
-      showThemeDialog,
-      showVersionsDialog,
-      showServerDialog,
-      showSongFolderDialog,
       isDesktopApp,
+      showOptionsDialog,
       alwaysOnTop,
       onToggleAlwaysOnTop,
       loggedIn,
-      isAdmin,
       avatarSrc,
       goToProfile,
       goToLogin,
-      goToLeaderboard,
-      goToAdmin,
       handleLogout,
     };
   },

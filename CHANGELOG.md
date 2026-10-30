@@ -1,5 +1,580 @@
 # Changelog
 
+## 2026-10-30 – Version 1.0.22: Cover nachträglich ändern
+
+### Versionen
+
+- Im Versions-Editor lässt sich das Cover einer eigenen oder selbst freigegebenen Version
+  ändern: ein mitgeliefertes Bild wählen oder ein eigenes hochladen. Gespeichert wird es
+  wie alles andere mit „Speichern“, bei freigegebenen Versionen sehen es alle Konten.
+
+### Dokumentation
+
+- Die Anleitung beschreibt das neue Hauptmenü, das Wiedereinsteigen in eine laufende
+  Runde, die Import-Vorschau, den Abgleich mit MusicBrainz und die gemerkten Spielstände.
+
+## 2026-10-30 – Version 1.0.21: Originaljahr und ISRC
+
+### Versionen
+
+- Ist ein Song bei MusicBrainz als eigenes Remaster, Neuaufnahme oder Compilation-Fassung
+  geführt, sucht die Prüfung das Jahr der Originalaufnahme. Die Vorschau zeigt dann
+  „Diese Aufnahme: 2011 (Remaster) · Original: 1975“ mit „Original übernehmen“,
+  „Aufnahme übernehmen“ und „Behalten“, dazu „Alle Originaljahre übernehmen“.
+- Von MusicBrainz ergänztes Band/Solo steht direkt am Song und lässt sich zurücknehmen.
+
+### Daten
+
+- Alle mitgelieferten Songs haben jetzt einen ISRC (im Spiel nicht sichtbar), für einen
+  sicheren Abgleich mit MusicBrainz.
+
+## 2026-10-30 – Version 1.0.20: Abgleich mit MusicBrainz
+
+### Versionen
+
+- Beim Import aus einer Exportify-CSV wird der ISRC jedes Songs mitgespeichert (im Spiel
+  nicht sichtbar).
+- Die Import-Vorschau prüft die Songs im Hintergrund mit der freien Musikdatenbank
+  MusicBrainz: Fehlendes Band/Solo wird ergänzt, abweichende Erscheinungsjahre und Hinweise
+  wie „Live-Aufnahme“, „Cover“ oder „Remaster“ werden angezeigt und lassen sich übernehmen
+  oder behalten.
+- Im Versions-Editor prüft „Mit MusicBrainz prüfen“ eine bestehende Version.
+- Für die Song-Daten gibt es ein Prüfskript (`scripts/check-song-data.js`), das einen
+  Bericht über abweichende Jahre, Live- und Cover-Aufnahmen und Doppelte schreibt.
+
+## 2026-10-29 – Version 1.0.19: Hauptmenü und viele Korrekturen
+
+### Neues Hauptmenü
+
+- Startbildschirm wie bei Minecraft: „Lokal spielen“, „Online spielen“, „Versionen“,
+  darunter Statistik, Optionen, Beenden (Desktop-App) und Rangliste.
+- In den Untermenüs: neues Spiel, Raum erstellen oder beitreten und „Spielstand laden“
+  mit einer Liste der zuletzt gespeicherten Spielstände samt Vorschau (Spieler, Punkte,
+  Versionen) oder aus einer Datei.
+- Optionen als eigener Bildschirm (Design, Server-Verbindung, Songs-Ordner,
+  Nutzerverwaltung). „Immer im Vordergrund“ bleibt im Menü oben rechts.
+- Die Online-Lobby ist wie die lokale Einrichtung aufgebaut, Zurück und Erstellen stehen
+  über der Versionsliste. Anmelden und Registrieren haben Zurück und Abbrechen.
+
+### Spielregeln
+
+- Gewonnen wird am Ende einer vollen Runde: Wer 10 oder mehr Karten hat und allein vorn
+  liegt, gewinnt. Bei Gleichstand wird weitergespielt. Punkte entscheiden nicht mehr,
+  die +3 für 10 Karten bleiben.
+- Der Rate-Bonus zählt immer, auch bei falscher Einordnung. Einwände gibt es zurück, wenn
+  der Spieler selbst richtig lag, und beim Skip.
+- Die Startkarte liegt im Zeitraum der gewählten Versionen.
+- Punkte werden nicht mehr aus anderen Spielen übernommen.
+
+### Multiplayer
+
+- „Alle Geräte“: Wer geht oder die Verbindung verliert, blockiert den Song nicht mehr.
+- Wer „Raum verlassen“ drückt, kommt mit Freigabe des Hosts zurück. Ein neuer Host
+  übernimmt den laufenden Spielstand.
+- Bingo: Sieg auch bei abgebrochener Runde, Korrekturen des Hosts nehmen Siege zurück.
+
+### Versionen und Daten
+
+- Keine doppelten Versionen mehr beim Anlegen oder Freigeben, beim Abmelden bleiben
+  keine Versionen für das nächste Konto zurück.
+- Band/Solo für alle Songs nachgetragen, Soundtracks zählen das Jahr der Aufnahme und das
+  Film- oder Serienjahr, mehrere Datenfehler korrigiert.
+
+### Texte
+
+- Meldungen überarbeitet, Regeltexte und Anleitung beschreiben die echten Regeln.
+
+## 2026-10-26 – Version 1.0.18: Updates und Versionsanzeige
+
+### Desktop-App
+
+- Die Aufforderung „Update ist bereit. Jetzt installieren?“ erscheint jetzt auch, wenn das
+  Update schon beim vorigen Start fertig geladen wurde. Bisher ging die Meldung dann
+  verloren, und unter Windows kam keine Aufforderung.
+- Windows: Das Setup installiert immer für den eigenen Benutzer und ersetzt die bestehende
+  Installation, auch wenn man es von Hand aus GitHub lädt. Die Auswahl „Für alle Benutzer“
+  entfällt, sie legte eine zweite Installation an.
+
+### Spiel
+
+- Die aktiven Versionen stehen jetzt in jeder Spielansicht, auch im Bingo und im
+  Battle-Modus (dort die Versionen aller Spieler zusammen).
+
+## 2026-10-26 – Version 1.0.17: Stabilere Verbindung
+
+### Verbindung
+
+- Die Desktop-App wird nicht mehr gedrosselt, wenn ihr Fenster verdeckt oder minimiert
+  ist. Unter Windows lag Spotify oft davor, und die Verbindung brach etwa alle fünf
+  Minuten ab.
+- Die Verbindung zum Server läuft jetzt über WebSocket, Polling bleibt als Rückfall.
+  Bisher war jede Nachricht eine eigene Anfrage, auf langsamen Leitungen dauerte alles
+  entsprechend lange.
+
+### Multiplayer
+
+- „Raum verlassen“ löscht im laufenden Spiel den Platz nicht mehr. Wer geht, kommt per
+  Raumcode mit Freigabe des Hosts zurück.
+
+## 2026-10-26 – Version 1.0.16: Raumcode und Versionsanzeige
+
+### Lobby
+
+- Das Feld für den Raumcode filtert Leer- und Sonderzeichen heraus und kürzt erst danach
+  auf 6 Zeichen. Bisher zählte ein unsichtbares Zeichen mit, und das letzte Zeichen des
+  Codes ließ sich nicht mehr eintippen.
+
+### Spiel
+
+- In der Kopfzeile zeigt ein Chip die aktiven Versionen. Ein Klick öffnet die Liste mit
+  Cover und Namen, auch für eigene und freigegebene Versionen des Hosts. Im Battle-Modus
+  stehen die Versionen wie bisher an den Zeitleisten.
+
+## 2026-10-26 – Version 1.0.15: Rückkehr ins laufende Spiel
+
+### Multiplayer
+
+- Wer App oder Tab geschlossen hat und im laufenden Spiel noch einen Platz hat, kommt per
+  Raumcode zurück. Statt der Slot-Auswahl erscheint „Zurück ins Spiel“, der Host bekommt
+  einen Dialog und gibt die Rückkehr frei oder lehnt sie ab. Bisher lehnte die Lobby
+  jedes laufende Spiel ab.
+- Wer im laufenden Spiel keinen Platz hat, kann nicht mehr beitreten. Vorher konnte in
+  Randfällen mitten im Spiel ein neuer Platz entstehen, den der Spielstand nicht kannte.
+
+## 2026-10-26 – Version 1.0.14: Vordergrund unter Windows
+
+### Desktop-App (Windows)
+
+- „Immer im Vordergrund“ liegt jetzt über der Taskleiste statt direkt dahinter. Bisher
+  rutschte Hitster mit der Taskleiste hinter Spotify, sobald Spotify beim Songstart nach
+  vorn kam, und schien von selbst in den Hintergrund zu gehen.
+- Hatte Hitster beim Songstart den Fokus, holt es ihn von Spotify zurück, damit Spotify
+  im Hintergrund spielt. Das gilt auch ohne „Immer im Vordergrund“.
+
+## 2026-10-26 – Version 1.0.13: Import-Vorschau
+
+### Versionen
+
+- Wer eine bestehende Version per CSV ergänzt, sieht vor dem Anhängen alle Songs der CSV
+  und wählt aus, welche übernommen werden. Songs mit gleichem Link sind gesperrt, Songs
+  mit gleichem Titel und Künstler unter anderem Link (etwa Album und Deluxe-Fassung)
+  stehen als „möglicherweise doppelt“ da und sind nicht vorausgewählt. Bisher landeten
+  solche Songs unbemerkt ein zweites Mal in der Version.
+
+## 2026-10-11 – Version 1.0.12: Lokales Spiel
+
+### Lokales Spiel
+
+- Ein neues lokales Spiel startet wieder bei 0 Punkten. Bisher erbte jeder Spieler die
+  Punkte des gleichnamigen Spielers aus der Vorrunde, auch wenn der Spielstand nicht
+  gespeichert wurde. Punkte übernimmt nur noch „Neue Runde, Punkte behalten“ oder ein
+  geladener Spielstand.
+- Bei der Versionsauswahl zeigt ein Kasten über dem Weiter-Knopf alle gewählten Versionen
+  als Chips, so wie in der Online-Lobby.
+
+## 2026-10-08 – Version 1.0.11: Host-Wechsel, Fairness, Songs-Ordner
+
+### Host-Wechsel und Neuladen
+
+- Wer durch einen Ausfall Host wird, übernimmt den kompletten Spielstand: gespielte Songs,
+  laufende Platzierung, Einwände samt Restzeit, Zugzähler. Bisher konnten Songs doppelt
+  kommen, Rateversuche gingen verloren, und im Bingo löste niemand die Runde auf.
+- Ein Host, der neu lädt und dabei Gast wird, holt sich den Stand vom neuen Host.
+- „Song öffnen“ hängt nach dem Neuladen nicht mehr bei „Warte… 0/0“.
+- Ein Spieler, der sich neu verbindet, fliegt nicht mehr nach gut einer Minute aus der Lobby.
+- Verlässt der Host die Lobby, wird zuverlässig ein verbundener Spieler Host. Ist niemand
+  verbunden, wird es der Nächste, der zurückkommt.
+- Aus der Lobby führt „Zurück zum Spiel“ wieder in ein laufendes Spiel.
+- Verlassene laufende Spiele werden nach 10 Minuten abgeräumt.
+
+### Fairness
+
+- Bingo schickt Titel, Künstler und Jahr erst nach der Auflösung an die Geräte. Vorher
+  standen sie für jeden lesbar im Netzwerkverkehr.
+- Im Bingo sieht jedes Team vor der Auflösung nur seine eigene Antwort.
+- Der Host nimmt Aktionen eines Gastes nur an, wenn der Gast dran ist. Ein Doppeltipp beim
+  Einwand zählt nicht mehr als Einwand des nächsten Spielers.
+
+### Spielablauf
+
+- Ein Skip räumt laufende Einwände ab. Vorher liefen deren Countdown und Meldungen weiter.
+- Blockiert der Browser das automatische Öffnen bei „Alle Geräte“, erscheint ein Knopf
+  „Jetzt abspielen“. In der Desktop-App öffnet der Song weiter von selbst.
+
+### Konto
+
+- Eine Passwortänderung oder ein Zurücksetzen meldet alle anderen Geräte ab. Das eigene
+  Gerät bleibt angemeldet.
+
+### Desktop-App
+
+- Der Songs-Ordner wird nicht mehr bei jedem Start überschrieben. Ein Update erneuert nur
+  Dateien und CSV-Abschnitte, die du nicht verändert hast, fehlende werden angelegt.
+- Linux: Läuft Spotify nicht, öffnet der Song jetzt über den `spotify:`-Link bzw. im
+  Browser. Vorher passierte gar nichts.
+- Release-Workflow: Scheitert ein Upload, wird er wiederholt und der Lauf schlägt fehl,
+  statt grün durchzulaufen. Die Update-Dateien kommen erst, wenn alle Installer oben sind.
+
+## 2026-10-08 – Version 1.0.10: Fehlerbehebungen aus dem Code-Review
+
+### Sicherheit
+
+- Eine geschützte oder geteilte Version ließ sich von jedem angemeldeten Nutzer übernehmen,
+  indem er beim Teilen deren Kennung mitschickte. Der Server vergibt die Kennung jetzt
+  selbst, und ein geteilter Name kann keine vorhandene Version mehr überdecken.
+- Die Anmeldung eines gelöschten Accounts galt für einen neuen Account mit gleichem Namen.
+- Die Desktop-App öffnet im Browser nur noch Spotify-Links.
+
+### Spiel
+
+- Gäste bekommen im Film-Modus jetzt Punkte für den Film, der Tipp kam beim Host nie an.
+- Nach „Neue Runde, Punkte behalten“ werden die Ergebnisse wieder in Bestenliste und
+  Statistik verbucht.
+- Ein doppelter Tipp auf „Raten abgeben“ wertet nicht mehr zweimal aus. Vorher fielen die
+  Bonuspunkte auf 0 und gemeldete Einwände verschwanden.
+- Ein doppelter Tipp auf „Neue Karte ziehen“ oder (im Bingo) „Runde starten“ zieht keine
+  zweite Karte mehr.
+- Eine von Hand angelegte oder neu geladene Startkarte sehen die Gäste sofort.
+- Der Bingo-Countdown läuft jetzt sekündlich herunter, vorher sprang er nur bei Eingaben.
+- Teamnamen mit Komma („Mama, Papa“) bleiben ein Name.
+- Ist der Browser-Speicher gesperrt, hängt die Rückkehr zur Lobby nicht mehr.
+
+### Versionen und Editoren
+
+- Ist der Server beim Speichern einer synchronisierten Version nicht erreichbar, bleibt
+  die Änderung lokal erhalten und wird nachgeholt. Vorher hieß es „gespeichert“, und der
+  alte Serverstand überschrieb sie später.
+- Löschen und Sync ausschalten melden einen Serverfehler und ändern dann nichts.
+- Der Versionen-Editor schließt sich bei einem Klick daneben nicht mehr und fragt bei
+  ungespeicherten Änderungen nach.
+- Im Song-Metadaten-Editor springt die Bearbeitung bei aktiver Suche nicht mehr auf einen
+  anderen Song.
+- Freigaben: Ein Admin trägt sich beim Bearbeiten fremder Freigaben nicht mehr selbst aus,
+  und Speichern ist gesperrt, bis die Accounts geladen sind.
+
+### Sonstiges
+
+- Ein Serverneustart (etwa nachts um 04:00) meldet niemanden mehr ab.
+- Windows: Ein Auto-Update bleibt am gewählten Installationsort. Vorher landete jedes
+  Update in `Downloads\Hitster`, und die alte Installation blieb liegen.
+
+## 2026-10-08 – Version 1.0.9: Lesbarkeit in allen Themes, deutlichere Bingo-Animationen
+
+### Lesbare Schrift in allen Themes
+
+In vielen Themes stand dunkle Schrift auf dunklem Grund, am auffälligsten über der
+Bingo-Karte. Ursache war, dass Flächen die Schriftfarbe der Seite geerbt haben, und die ist
+in hellen Themes dunkel. Flächen haben jetzt eine eigene, immer helle Schriftfarbe. Dazu:
+
+- Die Akzentfarbe wird bei Bedarf leicht in der Helligkeit verschoben, damit ihre
+  Beschriftung lesbar bleibt. Der Farbton bleibt, das gilt auch für einen eigenen Akzent.
+- Akzent als Schriftfarbe hat eine eigene, hellere Variante.
+- Text direkt auf Verläufen bekommt einen Schatten, wo der Verlauf ihn braucht.
+- Nicht gewählte Umschalter und deaktivierte Knöpfe (etwa „Abgeben“ bei leerem Feld) haben
+  eine deckende Fläche mit heller Schrift statt dunkler Schrift auf durchscheinendem Akzent.
+- Bingo-Chips sind nicht mehr abgedunkelt, Zeitleisten-Karten haben eine passende
+  Schriftfarbe und einen Rand, der sich auch bei dunklen Kartenfarben vom Grund abhebt.
+- Bingo-Pink und drei Kartenfarben sind minimal verschoben, alle bleiben klar unterscheidbar.
+- Die Nutzerverwaltung hatte keinen Theme-Hintergrund, jetzt wie alle Seiten.
+
+Gemessen über alle 30 Themes sinken die Kontrastfehler von 2260 auf 73, und die restlichen
+liegen nur hinter geöffneten Dialogen.
+
+### Barrierefreiheit
+
+Alle Icon-Knöpfe und Dialoge haben Namen für Screenreader, jede Seite eine Überschrift, die
+Sprache ist Deutsch, und Zoomen ist erlaubt. Die Einordnen-Plätze der Zeitleiste und die
+Bingo-Felder lassen sich per Tab und Enter bedienen.
+
+### Bingo: deutlichere Animationen
+
+- **Kreuz setzen:** Die wählbaren Felder pulsieren mit einem weißen Ring, alle anderen
+  werden abgedunkelt. Ein neu gesetztes ✕ springt kurz auf.
+- **Kreuz entfernt:** Das Feld wackelt und blinkt rot, das ✕ wird rot, dreht sich weg und
+  blendet aus. Das gilt auf der eigenen Karte und bei den Gegnern.
+
+Mit „Bewegung reduzieren“ im System bleiben nur Ringe und Ausblenden.
+
+### Behoben
+
+- **Sieg nach Host-Korrektur:** Setzt der Host per Korrektur ein Kreuz, das einem Team zum
+  Sieg reicht, endet das Spiel jetzt sofort. Bisher wurde der Sieg erst bei der nächsten
+  Auflösung erkannt.
+- **Rate-Dialog:** „Der Song wurde in Spotify geöffnet“ steht nur noch, wenn er auf diesem
+  Gerät tatsächlich geöffnet wurde (auch ein vom Browser blockiertes Fenster wird jetzt
+  erkannt). Dazu gibt es im Dialog einen Knopf „Song öffnen“.
+- **Bingo Timer/Warten:** Stellt der Host im Spiel um, zeigen alle die neue Einstellung an.
+  Bisher wirkte die Umstellung, die Anzeige blieb aber beim alten Modus.
+
+## 2026-10-07 – Version 1.0.8: Bingo mit Abgabe und Einblendungen, mehrere Einträge pro Feld
+
+### Mehrere Einträge mit `;` bei Titel, Künstler, Jahr und Film/Serie
+
+Beim Bearbeiten einer Edition lassen sich jetzt in jedem dieser Felder mehrere Einträge
+angeben, getrennt mit `;`. Gedacht ist das für Fälle, die nicht eindeutig sind: ein Titel,
+den man unterschiedlich schreiben kann, oder ein Song, den es auf zwei Alben mit
+verschiedenen Jahren gibt.
+
+| Feld | Beim Raten | Angezeigt wird |
+|---|---|---|
+| Titel | jede Variante zählt | die erste |
+| Künstler | jeder Beteiligte zählt (wie bisher) | alle, mit Komma |
+| Film/Serie | jede Variante zählt, das alte `\|` geht weiter | die erste |
+| Jahr | siehe unten | in der Auflösung alle, etwa „1998 / 2000“ |
+
+Beim Jahr ist das erste das Hauptjahr. Gibt jemand beim Einordnen eines der hinterlegten
+Jahre ein, bekommt die Karte genau dieses Jahr: Gegen dieses Jahr wird die Platzierung
+geprüft, und damit liegt die Karte danach in der Zeitleiste. Sonst gilt das Hauptjahr.
+Einwände prüfen gegen dasselbe Kartenjahr. Ein Tipp auf eines der Jahre zählt als „Jahr
+exakt“. Im Bingo zählt bei allen Jahres-Kategorien jedes hinterlegte Jahr.
+
+Das Jahresfeld im Editor ist dafür jetzt ein Textfeld. Ein einzelnes Jahr wird weiter als
+Zahl gespeichert. Ohne `;` ändert sich nichts, unter den mitgelieferten Songs enthält kein
+Titel ein Semikolon.
+
+### Bingo: Antwort abgeben
+
+Bisher galt ein Team als fertig, sobald im Antwortfeld irgendetwas stand, auch mitten beim
+Tippen. Jetzt gibt es den Knopf „Abgeben“. Erst damit zählt das Team als fertig, danach ist
+das Feld gesperrt, und „Ändern“ gibt es wieder frei. Beim Auflösen werden getippte, aber
+nicht abgegebene Antworten weiterhin gewertet.
+
+### Bingo: Einblendungen bei Bingo und Sieg
+
+Schafft ein Team eine Reihe, sehen alle groß in der Mitte „BINGO! XY hat ein Bingo!“, nach
+ein paar Sekunden blendet es sich aus. Der Sieg kommt als größere Einblendung, die stehen
+bleibt, darunter „Zur Lobby“ für den Host.
+
+### Bingo: Runde hing ohne freies Feld
+
+Lag ein Team richtig, hatte in der Farbe aber kein freies Feld mehr, wartete die Runde für
+immer auf sein Kreuz. Solche Teams gelten jetzt gleich als erledigt.
+
+### Bingo: volle Farben werden nicht mehr gezogen
+
+Eine Farbe, die kein Team mehr markieren kann, fällt aus dem Ziehpool. Sie kommt von selbst
+zurück, sobald wieder ein Feld frei wird, etwa durch ein per Bonus entferntes Kreuz.
+
+### Windows: Hitster bleibt im Vordergrund
+
+Nach rund einer halben Stunde lag Spotify über Hitster, obwohl „Immer im Vordergrund“ an
+war. Windows nimmt einem Fenster diesen Status gelegentlich weg. Hitster setzt ihn jetzt
+nach jedem Songstart, bei Fokusverlust und einmal pro Minute neu.
+
+## 2026-10-07 – Version 1.0.7: Spotify spielt unter Windows wieder ab, Bingo hängt nicht mehr nach dem Bonus
+
+### Windows: Song wurde geladen, aber nicht abgespielt
+
+Seit 1.0.5 öffnet die Desktop-App Songs unter Windows direkt über das `spotify:`-Protokoll
+statt über den Browser. Der Zusatz `:play` startet den Song aber nur unter Linux. Die
+Windows-App hat damit nur den neuen Song angezeigt, der alte lief weiter.
+
+Auf einem Windows-11-PC mit der Desktop-Version von Spotify (nicht aus dem Store)
+durchprobiert:
+
+| Aufruf | Ergebnis |
+|---|---|
+| `spotify:track:ID?autoplay=true` | spielt ab |
+| `Spotify.exe --protocol-uri="https://open.spotify.com/track/ID?autoplay=true"` | spielt ab |
+| `Spotify.exe --protocol-uri="https://open.spotify.com/track/ID?play=true"` | lädt nur |
+| `spotify:track:ID:play` | lädt nur |
+| `Spotify.exe https://open.spotify.com/track/ID?autoplay=true` | holt nur das Fenster nach vorn |
+
+Die App benutzt jetzt `spotify:track:ID?autoplay=true`. Das braucht weder „Apps für
+Websites“ noch den Pfad zu Spotify.
+
+### Bingo: Runde hing nach einem genauen Jahr
+
+Wer bei einer ±-Jahre-Kategorie das Jahr genau trifft, darf einem Gegner ein Kreuz
+wegnehmen. Danach ging die Runde nicht weiter, egal ob das Team ein Kreuz entfernt oder
+„Überspringen“ gewählt hat. Die Prüfung, ob alle Boni erledigt sind, ließ nur die Phase
+„Bonus prüfen“ durch, beim Einsetzen stand die Runde aber schon in der Phase „Bonus“.
+Weiter ging es nur über „Runde abbrechen“ des Hosts. Der Fehler steckte seit der ersten
+Bingo-Fassung im Code.
+
+Außerdem verfällt der Bonus jetzt von selbst, wenn kein Gegner ein Kreuz hat, das sich
+entfernen lässt. Kreuze in vollen 5er-Reihen zählen dabei nicht. Der Dialog geht dann gar
+nicht erst auf.
+
+Der Bingo-Fix liegt im Server. Er greift, sobald der Server den neuen Stand geholt hat.
+
+## 2026-10-07 – Version 1.0.6: AppImage startet wieder unter Wayland
+
+### 1.0.5 ging unter Wayland sofort wieder zu
+
+Der Neustart über XWayland aus 1.0.5 lief über `app.relaunch()`. Electron startet den neuen
+Prozess unter Linux aber über einen Helfer aus der eigenen Programmdatei, und die liegt bei
+der AppImage im Einhängepunkt unter `/tmp`. Den hängt die AppImage-Runtime aus, sobald der
+erste Prozess endet, damit verschwand der Helfer, bevor er etwas starten konnte. Die App
+beendete sich nach einer halben Sekunde ohne Fenster und ohne Logeintrag. Gestartet mit
+`--ozone-platform=x11` lief sie normal.
+
+Jetzt startet die App sich selbst als abgekoppelten Prozess neu, bei der AppImage über die
+echte Datei, die sich dabei neu einhängt. Schlägt das fehl, läuft sie einfach unter Wayland
+weiter. Die `.desktop`-Dateien von deb und rpm bringen den Schalter gleich mit, dort ist
+gar kein Neustart nötig.
+
+### AppImage behält ihren Dateinamen
+
+Die AppImage heißt jetzt einfach `Hitster.AppImage`. Bisher legte jedes Auto-Update eine
+neue Datei mit Versionsnummer an und löschte die alte, und ein Starter, der auf den alten
+Namen zeigte, lief ins Leere. Ohne Versionsnummer im Namen überschreibt das Update die
+Datei an Ort und Stelle. Beim Update von 1.0.5 auf 1.0.6 wechselt der Name noch einmal,
+danach bleibt er.
+
+### Release-Text auf GitHub
+
+Bei 1.0.3 bis 1.0.5 stand auf der Release-Seite immer die Beschreibung von 1.0.2. Die
+Releases hatten keinen eigenen Text, und dann zeigt GitHub die Commit-Nachricht an, auf die
+der Tag zeigt. Das war der letzte Code-Stand im Releases-Repo, also der von 1.0.2. Der
+Workflow übernimmt jetzt den obersten Abschnitt aus dieser Datei als Release-Text.
+
+## 2026-10-07 – Version 1.0.5: Spotify unter Windows wieder in der App, Linux-Fenster bleibt vorn
+
+### Windows: Songs öffneten im Browser statt in Spotify
+
+Die Desktop-App hat unter Windows bisher `https://open.spotify.com/track/…?autoplay=true`
+geöffnet. Das ging nur gut, solange Windows diese Adresse an die Spotify-App weiterreicht
+(Einstellungen → Apps → Apps für Websites). Ist das aus, etwa nach einer Neuinstallation
+von Spotify, landete jeder Song im Browser, und auch die Weiterleitung von dort in die App
+klappte nicht.
+
+Jetzt geht der Song direkt über das Protokoll `spotify:track:ID:play`, sobald ein Programm
+für `spotify:`-Links eingetragen ist. Der Zusatz `:play` lädt den Titel und startet ihn
+auch dann, wenn Spotify schon läuft und vorher ein anderer Song lief (geprüft mit Spotify
+1.2.95). Der Weblink bleibt nur als Rückfall, wenn keine Spotify-App eingetragen ist.
+
+### Linux: „Immer im Vordergrund" wirkte nicht
+
+Seit Electron 38 läuft die App in einer Wayland-Sitzung nativ als Wayland-Programm. Wayland
+erlaubt einem Fenster aber nicht, sich selbst über andere zu legen, der Schalter blieb
+deshalb wirkungslos. Die App startet sich unter Wayland jetzt einmal mit
+`--ozone-platform=x11` neu und läuft über XWayland, wo es funktioniert. Bei der AppImage
+läuft der Neustart über die AppImage-Datei selbst.
+
+### Linux: Spotify drängte sich in den Vordergrund
+
+Aktuelle Spotify-Versionen (etwa das Flatpak 1.2.95) holen ihr Fenster nach vorn, wenn
+Hitster über MPRIS einen Song lädt. Hatte Hitster vorher den Fokus, holt es ihn sich jetzt
+kurz danach zurück, Spotify spielt im Hintergrund weiter.
+
+## 2026-09-01 – Battle of the Generations war das falsche Land, Wacken On Air neu
+
+### Battle of the Generations: niederländische statt deutsche Ausgabe
+
+Ein Abgleich aller 20 Editionen gegen die Kartenlisten auf hitify.app hat gezeigt: Die
+Songinhalte stimmen praktisch überall, aber Battle of the Generations war die
+**niederländische** Fassung. Von den 419 Titeln fanden sich 415 in der niederländischen
+Ausgabe (99 Prozent), aber nur 155 in der deutschen (37 Prozent). Zum Vergleich: Nordics
+25 Prozent, Frankreich 10 Prozent. Erkennbar war es auch von Hand, Karte 1 war Dolly Dots
+mit „She's a Liar", dazu Alexander Curly und Normaal.
+
+Ersetzt durch die deutsche Ausgabe mit 420 Karten. Die Aufteilung auf die drei Sparten
+folgt der Kartennummer, nicht dem Jahr: 1 bis 140 sind „bis 1984", 141 bis 280 sind
+„1985–2004", 281 bis 420 sind „2005–2025". Dass diese Aufteilung stimmt, ließ sich an der
+bisherigen niederländischen Fassung nachrechnen, deren drei Dateien genau diesen
+Nummernbereichen entsprachen.
+
+### Neue Edition: Wacken On Air
+
+320 Karten. Das Cover stammt aus einem Foto der Spielschachtel: Der Bildausschnitt wurde
+per Kreuzkorrelation bestimmt (Übereinstimmung 0,87), das ergibt 340 statt 123 Pixel
+Kantenlänge. Erst dadurch sind „ESTD. 1990" und die Zeichnung des Schädels überhaupt
+lesbar. Insgesamt sind mit beiden Importen 687 Songs neu in die Metadaten gekommen.
+
+### Jahreszahlen: das frühere der beiden Jahre
+
+Beim Import fiel auf, dass die Jahre aus dem Spotify-Export oft die Neuauflage meinen und
+nicht die Erstveröffentlichung. Dooley Wilson mit „As Time Goes By" stand auf 2012 statt
+1942, ZZ Top mit „Tush" auf 2022 statt 1975, Mike Oldfields „Tubular Bells" auf 2023 statt
+1973. Die Kartenliste auf hitify hat denselben Fehler, nur bei anderen Titeln, etwa Rose
+Tattoo mit 2018 statt 1978.
+
+Weil beide Quellen immer nur in dieselbe Richtung irren, nämlich zu spät, gilt jetzt die
+Regel: **das frühere der beiden Jahre, sofern es plausibel ist.** Bei Battle ist die
+Sparte selbst der Plausibilitätsrahmen, ein Song im Stapel „bis 1984" kann nicht von 2012
+sein. So wurden 148 Jahre berichtigt, 99 bei Battle und 43 bei Wacken. Sechs Karten kannten
+in beiden Quellen nur ein Neuauflage-Datum und wurden von Hand gesetzt, darunter Anton
+Karas mit „The Third Man Theme" (1949) und Hildegard Knefs „Macky-Messer" (1963).
+
+Zwei Karten liegen bewusst außerhalb ihrer Sparte, weil dort das richtige Jahr wichtiger
+ist als der saubere Rahmen: Joe Dolce, „Shaddap You Face" (1980) im Stapel 1985–2004.
+
+### Jahre in allen übrigen Editionen bereinigt
+
+Dieselbe Regel wurde auf die 17 anderen Editionen angewandt, in denen der Abgleich
+Unterschiede ergeben hatte: 670 Karten, bei denen dein Bestand und die Kartenliste
+auseinanderlagen. Übernommen wurde jeweils das frühere der beiden Jahre, sofern es
+plausibel ist. Ergebnis: **428 Songs** haben ein neues Jahr, unter anderem ZZ Top mit
+„Tush" (1975 statt 2022), Ben E. King mit „Stand By Me" (1961 statt 1962) und Ritchie
+Valens mit „La Bamba" (1958 statt 1959).
+
+14 Fälle waren automatisch nicht zu entscheiden, weil das frühere Jahr nicht zum
+sonstigen Schaffen des Interpreten passte. Sie wurden einzeln recherchiert. Bei drei
+ungarischen Titeln stand in der Kartenliste ein offensichtlicher Platzhalter (1900 bei
+Zanzibár, zweimal 1939 bei Bergendy), dort bleibt der bisherige Wert; er ist belegt, etwa
+„Szólj már" von Zanzibárs Album „Nem vagyok tökéletes" aus dem Jahr 2001. Umgekehrt ist
+„Disarm" von den Smashing Pumpkins nicht von 1980, die Band gab es damals noch nicht, hier
+gilt 1993.
+
+Zusätzlich wurden alle 71 Karten geprüft, bei denen der bisherige Wert mindestens zehn
+Jahre früher lag als die Kartenliste. Bis auf eine sind sie richtig, dort ist der eigene
+Wert das Original und die Kartenliste die Neuauflage. Die Ausnahme: „Hey There Delilah"
+stand auf 1987, die Band wurde aber erst 1997 gegründet, jetzt 2005.
+
+Nebenwirkung dieser Bereinigung: Ein Jahr gehört zum Song, nicht zum Deck. Wo ein Titel in
+mehreren Editionen vorkommt, ist er überall gleich gesetzt, widersprüchliche Jahre in der
+Metadaten-CSV gibt es jetzt keine mehr.
+
+### Nebenbei geprüft
+
+Die übrigen Editionen sind inhaltlich in Ordnung. Wo etwas abwich, war es nur eine andere
+Schreibweise (`Kingsmen` gegen `The Kingsmen`). Drei Punkte bleiben offen und sind nicht
+Teil dieser Änderung: „Deutsch" enthält ab Karte 309 199 eigene Songs (so gewollt),
+Schlager Party führt bei hitify 344 statt 307 Karten, und für Polonia Rock ist die
+hitify-Liste unvollständig und damit nicht vergleichbar.
+
+## 2026-08-25 – Logo verrutscht nicht mehr, Einstellung zum Öffnen von Songs
+
+### Der Schriftzug auf dem Startbildschirm lag auf dem Handy schief
+
+Das Logo war SVG-**Text** in „Impact, Arial Narrow, Helvetica Inserat, Bebas Neue".
+Keine dieser vier Schriften gibt es auf Android oder iOS, und das Projekt lieferte
+auch keine mit, auf dem Handy landete also alles beim sans-serif-Rückfall. Impact
+ist extrem schmal, „HITSTER" misst damit 689 der 900 Einheiten des Zeichenbereichs.
+Roboto oder Helvetica brauchen bei derselben Schriftgröße rund 1050 Einheiten. Der
+Schriftzug lief damit seitlich aus dem Zeichenbereich und wurde beschnitten, und
+weil die dicke Außenkontur zusätzlich durch einen Weichzeichner mit eigenem
+Bezugsrahmen läuft, die dünne Innenlinie aber nicht, drifteten die beiden Ebenen
+sichtbar auseinander.
+
+Der Schriftzug liegt jetzt als **Kontur** vor, gewonnen aus Impact bei derselben
+Schriftgröße, demselben Zeichenabstand und derselben Grundlinie wie bisher. Auf dem
+Rechner sieht er deshalb unverändert aus, auf dem Handy erstmals genauso. Beide
+Ebenen verweisen auf dieselbe Geometrie und können gar nicht mehr gegeneinander
+verrutschen, eine Schriftabhängigkeit gibt es nicht mehr.
+
+### „Song öffnen" ist jetzt einstellbar
+
+Mit Version 1.0.2 öffnen Songs die Spotify-App statt eines Browser-Tabs. Der
+Umschalter dafür war im Code zwar vorhanden, aber an keiner Stelle bedienbar, es
+gab also keinen Weg zurück zum alten Verhalten. Im Konto-Menü steht jetzt der Punkt
+**Song öffnen** mit drei Möglichkeiten:
+
+- **Automatisch** (Standard): erst die Spotify-App versuchen, meldet sich keine,
+  dann der Web-Player in einem Tab.
+- **Immer die Spotify-App**: ohne Rückfall.
+- **Immer im Browser**: Web-Player in einem Tab, der beim nächsten Song wieder
+  geschlossen wird. Die Spotify-App bleibt zu.
+
+Die Wahl gilt pro Gerät. In der Desktop-App erscheint der Punkt nicht, dort spricht
+der Hauptprozess den Spotify-Client ohnehin direkt an.
+
+Nicht umsetzbar ist der Wunsch, dass Spotify im Hintergrund bleibt oder der Fokus
+danach zur Seite zurückkehrt. Beides kann eine Webseite nicht, dazu bräuchte es die
+Wiedergabe über Spotify Connect oder das Web Playback SDK, und beides setzt ein
+Premium-Konto voraus.
+
 ## 2026-08-20 – Version 1.0.2: Bedienbar auf dem Handy, Songs öffnen in der App
 
 ### Zwei Bedienelemente waren auf dem Handy nicht erreichbar

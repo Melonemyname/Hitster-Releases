@@ -6,7 +6,14 @@
       :size="size"
       class="avatar-stack__item"
       :style="i === 0 ? {} : { marginLeft: `-${overlap}px` }"
+      :role="urlFor(entry.avatar) ? undefined : 'img'"
+      :aria-label="
+        urlFor(entry.avatar) ? undefined : entry.username || 'Profilbild'
+      "
     >
+      <!-- Ohne Bild traegt der Avatar selbst den Namen (role="img"), sonst
+           bliebe er fuer Screenreader stumm: Quasar blendet Icons aus. Mit
+           Bild uebernimmt das alt-Attribut. -->
       <img
         v-if="urlFor(entry.avatar)"
         :src="urlFor(entry.avatar)"
@@ -82,8 +89,11 @@ export default {
 .avatar-stack__item img {
   object-fit: cover;
 }
+/* Das Icon steht auf der Flaeche (--surface-bg-weak), nicht auf dem Akzent:
+   --app-on-accent war in Themes mit hellem Akzent dunkel und damit auf der
+   dunklen Flaeche kaum sichtbar. */
 .avatar-stack__item .q-icon {
-  color: var(--app-on-accent, #fff);
+  color: var(--app-on-surface, #f5f5f5);
   opacity: 0.85;
 }
 </style>

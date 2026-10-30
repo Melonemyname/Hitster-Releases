@@ -139,6 +139,9 @@ function listForUser (userId, isAdmin = false) {
         cover: v.cover || { kind: 'preset', ref: 'custom' },
         restricted: true,
         film: !!v.film,
+        // Ersteller (stabile Nutzer-id, bei Seeds null). Der Client braucht
+        // ihn im Freigabe-Dialog, um den Ersteller als fest freigegeben zu zeigen.
+        creatorId: v.creatorId || null,
         tracks: Array.isArray(v.tracks) ? v.tracks : [],
         canManage: manage,
         // Nur für Verwalter: Freigabeliste (für die Account-Auswahl im Client).
@@ -155,9 +158,20 @@ function upsert (version) {
   if (!version || !version.id) throw new Error('Version ohne id')
   const list = readStore()
   const existing = list.find(v => v.id === version.id)
+  const value = version.value || existing?.value || version.id
+  // Wie bei create(): Ein `value`, den schon eine andere Version trägt (als
+  // value oder id), würde diese im Client überdecken. Geprüft wird nur, wenn
+  // sich der Wert ändert, damit ein alter, schon doppelter Bestand weiter
+  // bearbeitet werden kann.
+  if (!existing || existing.value !== value) {
+    const belegt = list.some(v => v.id !== version.id && (v.value === value || v.id === value))
+    if (belegt) {
+      throw new Error('Diese Kennung nutzt schon eine andere Version. Bitte wähle eine andere.')
+    }
+  }
   const next = {
     id: version.id,
-    value: version.value || existing?.value || version.id,
+    value,
     label: version.label || 'Version',
     cover: version.cover || { kind: 'preset', ref: 'custom' },
     restricted: true,
@@ -178,14 +192,21 @@ function upsert (version) {
 
 // Eine neue (vom Nutzer geteilte) Version anlegen. Setzt den Ersteller und nimmt
 // ihn automatisch mit in die Freigabeliste auf (Ersteller hat seine Version
-// selbst). Erzeugt bei Bedarf eine eindeutige id.
+// selbst). Die id vergibt immer der Server: Eine vom Client mitgeschickte id
+// würde per Upsert eine fremde Version (etwa aus dem Seed) überschreiben und den
+// Aufrufer zu deren Ersteller machen. Aus demselben Grund darf der `value` keine
+// bestehende Version überdecken; ist er belegt, bekommt die neue Version die id
+// als value.
 function create (version, creatorId) {
-  const id = version && version.id ? version.id : `shared-${crypto.randomUUID()}`
+  const id = `shared-${crypto.randomUUID()}`
   const allowed = Array.isArray(version?.allowedUserIds) ? version.allowedUserIds : []
   const withCreator = creatorId ? [...new Set([...allowed, creatorId])] : allowed
+  const wanted = version?.value
+  const valueTaken = !!wanted && readStore().some(v => v.value === wanted || v.id === wanted)
   return upsert({
     ...version,
     id,
+    value: valueTaken ? id : wanted,
     creatorId: creatorId || null,
     allowedUserIds: withCreator
   })

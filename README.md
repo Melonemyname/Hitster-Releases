@@ -40,9 +40,13 @@ Mitspielenden ordnen ihn in ihrer Zeitleiste ein, die Anwendung kennt das Jahr
 und wertet aus.
 
 - **Lokal und online.** Am selben Gerät reihum, oder in einer Online-Lobby mit
-  Raumcode, bei der alle ihr eigenes Gerät benutzen.
+  Raumcode, bei der alle ihr eigenes Gerät benutzen. Wer die Verbindung
+  verliert, kommt mit Freigabe des Hosts in die laufende Runde zurück.
 - **Vier Spielarten:** Normal, Film/Serie, Battle und Bingo.
-- **Eigene Song-Stapel** aus jeder Spotify-Playlist, per CSV-Import.
+- **Eigene Song-Stapel** aus jeder Spotify-Playlist, per CSV-Import mit
+  Vorschau. Jahr und Band/Solo lassen sich mit der freien Musikdatenbank
+  MusicBrainz abgleichen.
+- **Spielstände** speichern und später fortsetzen, lokal wie online.
 - **Konten** mit Statistik, Rangliste und Profilbild.
 - **Anpassbares Design.**
 
@@ -70,7 +74,16 @@ Wer nichts einrichten will, nimmt ein fertiges Paket aus den
 | macOS (Apple Silicon) | `*-arm64.dmg` |
 | Eigener Server, ohne Git und ohne Bauen | `Hitster-Server-*.zip` |
 
-Unter Windows und Linux (AppImage) aktualisiert sich die App selbst.
+Unter Windows und Linux (AppImage) aktualisiert sich die App selbst. Der
+Windows-Installer lässt sich auch von Hand über eine bestehende Installation
+spielen, er ersetzt sie dann, statt eine zweite anzulegen.
+
+**Windows:** Auch hier sind die Pakete **nicht signiert**. SmartScreen warnt
+deshalb beim ersten Start („Weitere Informationen" → „Trotzdem ausführen").
+Ist die **Intelligente App-Steuerung** (Smart App Control) eingeschaltet,
+blockiert sie unsignierte Programme ganz, auch nach einem Update. Dann läuft die
+App nur, wenn diese Funktion in der Windows-Sicherheit abgeschaltet wird. Ob man
+das will, entscheidet, wem der Rechner gehört.
 
 **macOS:** Die Pakete sind **nicht signiert**, es gibt dort also kein
 automatisches Update, und beim ersten Start meldet das System die App als
@@ -215,28 +228,45 @@ bekommt die Nutzerverwaltung.
 Ohne HTTPS laufen Passwörter und Tokens im Klartext durchs Netz. Im eigenen WLAN
 ist das vertretbar, im Internet nicht.
 
+**Verbindung nach außen:** Für den Abgleich beim Import fragt der Server bei
+[MusicBrainz](https://musicbrainz.org) an und schickt dabei Titel, Künstler,
+ISRC und Spotify-Link der geprüften Songs mit, sonst nichts. Das passiert nur,
+wenn ein angemeldetes Konto eine CSV importiert oder „Mit MusicBrainz prüfen"
+wählt. Die Antworten landen in `musicbrainz-cache.json` im `DATA_DIR`, damit
+dieselben Songs nicht erneut abgefragt werden. MusicBrainz erlaubt höchstens
+eine Anfrage pro Sekunde, der Server hält sich daran.
+
 ## Songs mitbringen
 
-Die Anwendung liefert keine fertigen Kartenstapel aus. Unter „Versionen
-verwalten" wird eine Playlist als CSV importiert und daraus ein eigener Stapel:
+Mitgeliefert werden Songlisten als Spotify-Links mit Titel, Künstler und Jahr.
+Darüber hinaus wird unter **Versionen** im Hauptmenü jede Playlist als CSV
+importiert und daraus ein eigener Stapel:
 
 1. Playlist bei [Exportify](https://exportify.net) als CSV exportieren
 2. Im Dialog „Version erstellen" die Datei auswählen, Namen und Cover vergeben
 
-Titel, Künstler und Jahr kommen aus dem Export. Band/Solo wird für bekannte
-Künstler automatisch gesetzt und lässt sich pro Song nachbessern. Ein bestehender
-Stapel kann jederzeit mit einer weiteren CSV erweitert werden.
+Titel, Künstler, Jahr und ISRC kommen aus dem Export. Band/Solo wird für
+bekannte Künstler automatisch gesetzt und lässt sich pro Song nachbessern. Mit
+Anmeldung gleicht die Anwendung die Songs zusätzlich mit MusicBrainz ab: Sie
+ergänzt fehlendes Band/Solo und weist auf abweichende Jahre hin, etwa wenn die
+Playlist ein Remaster enthält und das Original älter ist. Name und Cover lassen
+sich später ändern, und ein bestehender Stapel kann jederzeit mit einer weiteren
+CSV erweitert werden. Eine Vorschau zeigt dabei, was neu ist und was schon
+drin steckt.
 
 Näheres in der [Anleitung](ANLEITUNG.md#song-versionen-verwalten).
 
 ## Für Forks
 
-Zwei Stellen zeigen auf die Infrastruktur dieses Projekts und müssen angepasst
-werden, wenn eigene Pakete gebaut werden sollen:
+Diese Stellen zeigen auf die Infrastruktur dieses Projekts und sollten
+angepasst werden, wenn eigene Pakete gebaut werden:
 
 - `quasar.config.js`, Abschnitt `builder.publish`: Ziel-Repo des Auto-Updates.
   Bleibt es unverändert, ziehen sich Installationen die Pakete **dieses**
   Projekts.
+- `server/musicbrainz.js`, Konstante `USER_AGENT`: MusicBrainz verlangt darin
+  eine Kontaktangabe. Ein Fork sollte dort auf das eigene Repo verweisen,
+  sonst landen Rückfragen bei diesem Projekt.
 - Ein Release-Workflow liegt bewusst nicht bei, weil er auf ein bestimmtes Repo
   und ein Zugriffstoken angewiesen ist. Lokal baut `npm run build:electron`.
 

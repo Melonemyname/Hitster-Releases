@@ -1,10 +1,16 @@
 <template>
-  <q-dialog :model-value="modelValue" @update:model-value="onUpdate">
+  <!-- Quasar legt `aria-labelledby` auf das role="dialog"-Element, der Name
+       kommt so aus der sichtbaren Ueberschrift. -->
+  <q-dialog
+    :model-value="modelValue"
+    aria-labelledby="bingo-legend-title"
+    @update:model-value="onUpdate"
+  >
     <q-card class="bingo-legend">
       <q-card-section class="bg-primary">
-        <div class="text-h6">
+        <div id="bingo-legend-title" class="text-h6">
           <q-icon name="info" class="q-mr-sm" />
-          Bingo – Farben &amp; Regeln
+          Bingo: Farben und Regeln
         </div>
         <div class="text-subtitle2">
           Schwierigkeit: {{ difficulty === "hard" ? "Schwer" : "Leicht" }}
@@ -13,9 +19,11 @@
 
       <q-card-section>
         <div class="text-body2 q-mb-md">
-          Pro Runde wird eine Kategorie zufällig gewählt. Errät dein Team die
-          Antwort, markiert es ein freies Feld der zugehörigen Farbe auf eurer
-          Bingokarte.
+          Gespielt wird in Teams. Pro Runde wird eine Kategorie zufällig
+          gewählt. Jedes Team gibt eine Antwort ab, das Spiel prüft sie
+          automatisch. Liegt euer Team richtig, markiert ihr ein freies Feld
+          der zugehörigen Farbe auf eurer Bingokarte. Punkte gibt es im Bingo
+          nicht.
         </div>
 
         <div class="bingo-legend__list">
@@ -27,9 +35,15 @@
             <span
               class="bingo-legend__swatch"
               :style="{ background: colorHex(cat.color) }"
+              aria-hidden="true"
             />
             <div>
-              <div class="text-subtitle2">{{ cat.label }}</div>
+              <!-- Farbname nur fuer Screenreader: Die Felder der Karte
+                   sagen ihre Farbe an, hier entsteht die Zuordnung. -->
+              <div class="text-subtitle2">
+                <span class="sr-only">{{ colorName(cat.color) }}: </span>
+                {{ cat.label }}
+              </div>
               <div class="text-caption" style="opacity: 0.85">
                 {{ cat.description }}
               </div>
@@ -42,8 +56,16 @@
         <div class="text-body2">
           <strong>Bingo:</strong> 5 markierte Felder in einer Reihe (waagerecht,
           senkrecht oder diagonal). Ziel für dieses Spiel:
-          <strong>{{ bingosToWin }} Bingo(s)</strong>. Erreichen mehrere Teams
-          in derselben Runde das Ziel, gewinnen sie geteilt.
+          <strong>{{ bingosToWin }} {{ bingosToWin === 1 ? "Bingo" : "Bingos" }}</strong>.
+          Erreichen mehrere Teams in derselben Runde das Ziel, gewinnen sie
+          geteilt.
+        </div>
+
+        <div class="text-body2 q-mt-sm">
+          <strong>Bonus:</strong> Trefft ihr in einer Kategorie mit Spielraum
+          (zum Beispiel ±2 Jahre) das Jahr exakt, dürft ihr ein Kreuz eines
+          anderen Teams entfernen. Ausgenommen sind Kreuze in einer bereits
+          vollen 5er-Reihe.
         </div>
       </q-card-section>
 
@@ -57,6 +79,7 @@
 <script>
 import { computed } from "vue";
 import { BINGO_CATEGORIES, BINGO_COLORS } from "../composables/useBingo";
+import { BINGO_COLOR_NAMES } from "./BingoCard.vue";
 
 export default {
   name: "BingoLegend",
@@ -81,8 +104,9 @@ export default {
       () => BINGO_CATEGORIES[props.difficulty] || BINGO_CATEGORIES.easy,
     );
     const colorHex = (colorKey) => BINGO_COLORS[colorKey] || "#666";
+    const colorName = (colorKey) => BINGO_COLOR_NAMES[colorKey] || colorKey;
     const onUpdate = (val) => emit("update:modelValue", val);
-    return { categories, colorHex, onUpdate };
+    return { categories, colorHex, colorName, onUpdate };
   },
 };
 </script>

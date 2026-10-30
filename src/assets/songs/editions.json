@@ -141,6 +141,13 @@
       "file": "hitster-battle-generations-bis-1984.txt",
       "cover": "battle-generations.png",
       "custom": false
+    },
+    {
+      "value": "wacken-on-air",
+      "label": "Wacken On Air",
+      "file": "hitster-wacken-on-air.txt",
+      "cover": "wacken.png",
+      "custom": false
     }
   ]
 }

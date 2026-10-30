@@ -13,10 +13,12 @@ export const BINGO_MAX_PER_COLOR = 7;
 
 // Die 5 Kategorie-Farben. Reihenfolge = fixe Zuordnung zu den Kategorien
 // (siehe BINGO_CATEGORIES). Werte sind vom Theme unabhängig, weil die
-// Farbe = Spielregel ist.
+// Farbe = Spielregel ist. Pink war #e91e63: darauf erreichte weder helle
+// noch dunkle Schrift 4,5:1 (Barrierefreiheit, WCAG 1.4.3), #d81b60 schafft mit heller
+// Schrift 4,54:1 und sieht nahezu gleich aus.
 export const BINGO_COLORS = Object.freeze({
   green: "#21ba45",
-  pink: "#e91e63",
+  pink: "#d81b60",
   yellow: "#f9a825",
   purple: "#8e24aa",
   blue: "#29b6f6",
